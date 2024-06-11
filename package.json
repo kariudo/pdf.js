@@ -1,5 +1,5 @@
 {
-  "name": "pdf.js",
+  "name": "@kariudo/pdf.js",
   "type": "module",
   "devDependencies": {
     "@babel/core": "^7.24.6",
