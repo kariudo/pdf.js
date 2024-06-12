@@ -2350,7 +2350,7 @@ gulp.task(
 gulp.task(
   "dist",
   gulp.series("dist-pre", function createDist(done) {
-    const VERSION = getVersionJSON().version;
+    // const VERSION = getVersionJSON().version;
 
     console.log();
     console.log("### Committing changes");
@@ -2370,8 +2370,10 @@ gulp.task(
           reasonParts[3];
       }
     }
-    // const message =
-    //   "PDF.js version " + VERSION + (reason ? " - " + reason : "");
+    const message =
+      "PDF.js version " + VERSION + (reason ? " - " + reason : "");
+
+    // Automatic tagging disabled.
     // safeSpawnSync("git", ["add", "*"], { cwd: DIST_DIR });
     // safeSpawnSync("git", ["commit", "-am", message], { cwd: DIST_DIR });
     // safeSpawnSync("git", ["tag", "-a", "v" + VERSION, "-m", message], {
@@ -2383,9 +2385,9 @@ gulp.task(
     // console.log(
     //   "  cd " + DIST_DIR + "; git push --tags " + DIST_REPO_URL + " master"
     // );
-    // console.log();
-
+    
     console.log();
+    console.log(message);
     console.log("Done.");
     console.log();
     done();
