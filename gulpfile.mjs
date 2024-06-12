@@ -2350,7 +2350,7 @@ gulp.task(
 gulp.task(
   "dist",
   gulp.series("dist-pre", function createDist(done) {
-    // const VERSION = getVersionJSON().version;
+    const VERSION = getVersionJSON().version;
 
     console.log();
     console.log("### Committing changes");
