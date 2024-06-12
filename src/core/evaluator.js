@@ -2333,6 +2333,7 @@ class PartialEvaluator {
     lang = null,
     markedContentData = null,
     disableNormalization = false,
+    includeTextContentChars = false,
     keepWhiteSpace = false,
   }) {
     // Ensure that `resources`/`stateManager` is correctly initialized,
@@ -2352,6 +2353,7 @@ class PartialEvaluator {
     const textContentItem = {
       initialized: false,
       str: [],
+      chars: [],
       totalWidth: 0,
       totalHeight: 0,
       width: 0,
@@ -2559,6 +2561,7 @@ class PartialEvaluator {
       textContentItem.spaceInFlowMin = fontSize * SPACE_IN_FLOW_MIN_FACTOR;
       textContentItem.spaceInFlowMax = fontSize * SPACE_IN_FLOW_MAX_FACTOR;
       textContentItem.hasEOL = false;
+      textContentItem.chars = [];
 
       textContentItem.initialized = true;
       return textContentItem;
@@ -2606,6 +2609,7 @@ class PartialEvaluator {
         transform: textChunk.transform,
         fontName: textChunk.fontName,
         hasEOL: textChunk.hasEOL,
+        chars: textChunk.chars,
       };
     }
 
@@ -2962,6 +2966,16 @@ class PartialEvaluator {
           } else {
             textState.translateTextMatrix(0, -charSpacing);
           }
+        }
+
+        // Include each character and its width in output if option is enabled.
+        if (includeTextContentChars) {
+          textChunk.chars.push({
+            char: glyph.fontChar,
+            width: scaledDim,
+            unicode: glyph.unicode,
+            transform: textChunk.prevTransform,
+          });
         }
       }
     }
@@ -3325,6 +3339,7 @@ class PartialEvaluator {
                     markedContentData,
                     disableNormalization,
                     keepWhiteSpace,
+                    includeTextContentChars,
                   })
                   .then(function () {
                     if (!sinkWrapper.enqueueInvoked) {

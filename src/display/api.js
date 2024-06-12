@@ -1128,6 +1128,19 @@ class PDFDocumentProxy {
  *   content items in the items array of TextContent. The default is `false`.
  * @property {boolean} [disableNormalization] - When true the text is *not*
  *   normalized in the worker-thread. The default is `false`.
+ * @property {boolean} [keepWhiteSpace] - When true keep whitespace characters.
+ * @property {boolean} [includeTextContentChars] - When true include character
+ *  array in text content.
+ */
+
+/**
+ * Text character in content.
+ *
+ * @typedef {Object} TextCharItem
+ * @property {string} char - Character glyph.
+ * @property {number} width - Scaled width of character.
+ * @property {string} unicode - Character unicode.
+ * @property {Array<any>} transform - Transformation matrix.
  */
 
 /**
@@ -1149,6 +1162,7 @@ class PDFDocumentProxy {
  * @property {string} str - Text content.
  * @property {string} dir - Text direction: 'ttb', 'ltr' or 'rtl'.
  * @property {Array<any>} transform - Transformation matrix.
+ * @property {Array<TextCharItem>} chars - Character list for text string.
  * @property {number} width - Width in device space.
  * @property {number} height - Height in device space.
  * @property {string} fontName - Font name used by PDF.js for converted font.
@@ -1615,6 +1629,8 @@ class PDFPageProxy {
   streamTextContent({
     includeMarkedContent = false,
     disableNormalization = false,
+    keepWhiteSpace = false,
+    includeTextContentChars = false,
   } = {}) {
     const TEXT_CONTENT_CHUNK_SIZE = 100;
 
@@ -1624,6 +1640,8 @@ class PDFPageProxy {
         pageIndex: this._pageIndex,
         includeMarkedContent: includeMarkedContent === true,
         disableNormalization: disableNormalization === true,
+        keepWhiteSpace: keepWhiteSpace === true,
+        includeTextContentChars: includeTextContentChars === true,
       },
       {
         highWaterMark: TEXT_CONTENT_CHUNK_SIZE,
