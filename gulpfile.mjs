@@ -2162,7 +2162,7 @@ gulp.task(
 function packageJson() {
   const VERSION = getVersionJSON().version;
 
-  const DIST_NAME = "pdfjs-dist";
+  const DIST_NAME = "@kariudo/pdfjs";
   const DIST_DESCRIPTION = "Generic build of Mozilla's PDF.js library.";
   const DIST_KEYWORDS = ["Mozilla", "pdf", "pdf.js"];
   const DIST_HOMEPAGE = "http://mozilla.github.io/pdf.js/";
@@ -2350,7 +2350,7 @@ gulp.task(
 gulp.task(
   "dist",
   gulp.series("dist-pre", function createDist(done) {
-    const VERSION = getVersionJSON().version;
+    // const VERSION = getVersionJSON().version;
 
     console.log();
     console.log("### Committing changes");
@@ -2372,17 +2372,23 @@ gulp.task(
     }
     const message =
       "PDF.js version " + VERSION + (reason ? " - " + reason : "");
-    safeSpawnSync("git", ["add", "*"], { cwd: DIST_DIR });
-    safeSpawnSync("git", ["commit", "-am", message], { cwd: DIST_DIR });
-    safeSpawnSync("git", ["tag", "-a", "v" + VERSION, "-m", message], {
-      cwd: DIST_DIR,
-    });
 
+    // Automatic tagging disabled.
+    // safeSpawnSync("git", ["add", "*"], { cwd: DIST_DIR });
+    // safeSpawnSync("git", ["commit", "-am", message], { cwd: DIST_DIR });
+    // safeSpawnSync("git", ["tag", "-a", "v" + VERSION, "-m", message], {
+    //   cwd: DIST_DIR,
+    // });
+
+    // console.log();
+    // console.log("Done. Push with");
+    // console.log(
+    //   "  cd " + DIST_DIR + "; git push --tags " + DIST_REPO_URL + " master"
+    // );
+    
     console.log();
-    console.log("Done. Push with");
-    console.log(
-      "  cd " + DIST_DIR + "; git push --tags " + DIST_REPO_URL + " master"
-    );
+    console.log(message);
+    console.log("Done.");
     console.log();
     done();
   })
