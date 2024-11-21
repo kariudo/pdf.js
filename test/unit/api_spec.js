@@ -43,10 +43,10 @@ import {
   PDFDocumentProxy,
   PDFPageProxy,
   PDFWorker,
-  PDFWorkerUtil,
   RenderTask,
 } from "../../src/display/api.js";
 import {
+  fetchData as fetchDataDOM,
   PageViewport,
   RenderingCancelledException,
   StatTimer,
@@ -70,7 +70,7 @@ describe("api", function () {
   let tempServer = null;
 
   beforeAll(function () {
-    CanvasFactory = new DefaultCanvasFactory();
+    CanvasFactory = new DefaultCanvasFactory({});
 
     if (isNodeJS) {
       tempServer = createTemporaryNodeServer();
@@ -116,6 +116,21 @@ describe("api", function () {
       }
     }
     return node;
+  }
+
+  async function getImageBlob(filename) {
+    if (isNodeJS) {
+      throw new Error("Not implemented.");
+    }
+    const TEST_IMAGES_PATH = "../images/";
+    const url = new URL(TEST_IMAGES_PATH + filename, window.location).href;
+
+    return fetchDataDOM(url, /* type = */ "blob");
+  }
+
+  async function getImageBitmap(filename) {
+    const blob = await getImageBlob(filename);
+    return createImageBitmap(blob);
   }
 
   describe("getDocument", function () {
@@ -624,7 +639,7 @@ describe("api", function () {
         expect(false).toEqual(true);
       } catch (reason) {
         expect(reason instanceof InvalidPDFException).toEqual(true);
-        expect(reason.message).toEqual("Invalid PDF structure.");
+        expect(reason.message).toEqual("Invalid Root reference.");
       }
 
       await loadingTask.destroy();
@@ -928,6 +943,31 @@ describe("api", function () {
       const workerSrc = PDFWorker.workerSrc;
       expect(typeof workerSrc).toEqual("string");
       expect(workerSrc).toEqual(GlobalWorkerOptions.workerSrc);
+    });
+
+    describe("isSameOrigin", function () {
+      it("handles invalid base URLs", function () {
+        // The base URL is not valid.
+        expect(PDFWorker._isSameOrigin("/foo", "/bar")).toEqual(false);
+
+        // The base URL has no origin.
+        expect(PDFWorker._isSameOrigin("blob:foo", "/bar")).toEqual(false);
+      });
+
+      it("correctly checks if the origin of both URLs matches", function () {
+        expect(
+          PDFWorker._isSameOrigin(
+            "https://www.mozilla.org/foo",
+            "https://www.mozilla.org/bar"
+          )
+        ).toEqual(true);
+        expect(
+          PDFWorker._isSameOrigin(
+            "https://www.mozilla.org/foo",
+            "https://www.example.com/bar"
+          )
+        ).toEqual(false);
+      });
     });
   });
 
@@ -1901,6 +1941,92 @@ describe("api", function () {
       await loadingTask.destroy();
     });
 
+    it("gets outline, with /XYZ destinations that lack zoom parameter (issue 18408)", async function () {
+      const loadingTask = getDocument(
+        buildGetDocumentParams("issue18408_reduced.pdf")
+      );
+      const pdfDoc = await loadingTask.promise;
+      const outline = await pdfDoc.getOutline();
+
+      expect(outline).toEqual([
+        {
+          action: null,
+          attachment: undefined,
+          dest: [{ num: 14, gen: 0 }, { name: "XYZ" }, 65, 705],
+          url: null,
+          unsafeUrl: undefined,
+          newWindow: undefined,
+          setOCGState: undefined,
+          title: "Page 1",
+          color: new Uint8ClampedArray([0, 0, 0]),
+          count: undefined,
+          bold: false,
+          italic: false,
+          items: [],
+        },
+        {
+          action: null,
+          attachment: undefined,
+          dest: [{ num: 13, gen: 0 }, { name: "XYZ" }, 60, 710],
+          url: null,
+          unsafeUrl: undefined,
+          newWindow: undefined,
+          setOCGState: undefined,
+          title: "Page 2",
+          color: new Uint8ClampedArray([0, 0, 0]),
+          count: undefined,
+          bold: false,
+          italic: false,
+          items: [],
+        },
+      ]);
+
+      await loadingTask.destroy();
+    });
+
+    it("gets outline, with /FitH destinations that lack coordinate parameter (bug 1907000)", async function () {
+      const loadingTask = getDocument(
+        buildGetDocumentParams("bug1907000_reduced.pdf")
+      );
+      const pdfDoc = await loadingTask.promise;
+      const outline = await pdfDoc.getOutline();
+
+      expect(outline).toEqual([
+        {
+          action: null,
+          attachment: undefined,
+          dest: [{ num: 14, gen: 0 }, { name: "FitH" }],
+          url: null,
+          unsafeUrl: undefined,
+          newWindow: undefined,
+          setOCGState: undefined,
+          title: "Page 1",
+          color: new Uint8ClampedArray([0, 0, 0]),
+          count: undefined,
+          bold: false,
+          italic: false,
+          items: [],
+        },
+        {
+          action: null,
+          attachment: undefined,
+          dest: [{ num: 13, gen: 0 }, { name: "FitH" }],
+          url: null,
+          unsafeUrl: undefined,
+          newWindow: undefined,
+          setOCGState: undefined,
+          title: "Page 2",
+          color: new Uint8ClampedArray([0, 0, 0]),
+          count: undefined,
+          bold: false,
+          italic: false,
+          items: [],
+        },
+      ]);
+
+      await loadingTask.destroy();
+    });
+
     it("gets non-existent permissions", async function () {
       const permissions = await pdfDocument.getPermissions();
       expect(permissions).toEqual(null);
@@ -2362,14 +2488,7 @@ describe("api", function () {
       if (isNodeJS) {
         pending("Cannot create a bitmap from Node.js.");
       }
-
-      const TEST_IMAGES_PATH = "../images/";
-      const filename = "firefox_logo.png";
-      const path = new URL(TEST_IMAGES_PATH + filename, window.location).href;
-
-      const response = await fetch(path);
-      const blob = await response.blob();
-      const bitmap = await createImageBitmap(blob);
+      const bitmap = await getImageBitmap("firefox_logo.png");
 
       let loadingTask = getDocument(buildGetDocumentParams("empty.pdf"));
       let pdfDoc = await loadingTask.promise;
@@ -2414,14 +2533,7 @@ describe("api", function () {
       if (isNodeJS) {
         pending("Cannot create a bitmap from Node.js.");
       }
-
-      const TEST_IMAGES_PATH = "../images/";
-      const filename = "firefox_logo.png";
-      const path = new URL(TEST_IMAGES_PATH + filename, window.location).href;
-
-      const response = await fetch(path);
-      const blob = await response.blob();
-      const bitmap = await createImageBitmap(blob);
+      const bitmap = await getImageBitmap("firefox_logo.png");
 
       let loadingTask = getDocument(buildGetDocumentParams("bug1823296.pdf"));
       let pdfDoc = await loadingTask.promise;
@@ -2438,6 +2550,21 @@ describe("api", function () {
           alt: "Hello World",
         },
       });
+      // Test if an alt-text using utf-16 is correctly handled.
+      // The Mahjong tile code is 0x1F000.
+      pdfDoc.annotationStorage.setValue("pdfjs_internal_editor_1", {
+        annotationType: AnnotationEditorType.STAMP,
+        rect: [128, 400, 148, 420],
+        rotation: 0,
+        bitmap: structuredClone(bitmap),
+        bitmapId: "im2",
+        pageIndex: 0,
+        structTreeParentId: "p3R_mc14",
+        accessibilityData: {
+          type: "Figure",
+          alt: "Γειά σου with a Mahjong tile 🀀",
+        },
+      });
 
       const data = await pdfDoc.saveDocument();
       await loadingTask.destroy();
@@ -2446,7 +2573,7 @@ describe("api", function () {
       pdfDoc = await loadingTask.promise;
       const page = await pdfDoc.getPage(1);
       const tree = await page.getStructTree();
-      const [predecessor, leaf] = findNode(
+      let [predecessor, leaf] = findNode(
         null,
         tree,
         0,
@@ -2474,6 +2601,36 @@ describe("api", function () {
         alt: "Hello World",
       });
 
+      let count = 0;
+      [predecessor, leaf] = findNode(null, tree, 0, node => {
+        if (node.role === "Figure") {
+          count += 1;
+          return count === 2;
+        }
+        return false;
+      });
+
+      expect(predecessor).toEqual({
+        role: "Span",
+        children: [
+          {
+            type: "content",
+            id: "p3R_mc14",
+          },
+        ],
+      });
+
+      expect(leaf).toEqual({
+        role: "Figure",
+        children: [
+          {
+            type: "annotation",
+            id: "pdfjs_internal_id_481R",
+          },
+        ],
+        alt: "Γειά σου with a Mahjong tile 🀀",
+      });
+
       await loadingTask.destroy();
     });
 
@@ -2481,14 +2638,7 @@ describe("api", function () {
       if (isNodeJS) {
         pending("Cannot create a bitmap from Node.js.");
       }
-
-      const TEST_IMAGES_PATH = "../images/";
-      const filename = "firefox_logo.png";
-      const path = new URL(TEST_IMAGES_PATH + filename, window.location).href;
-
-      const response = await fetch(path);
-      const blob = await response.blob();
-      const bitmap = await createImageBitmap(blob);
+      const bitmap = await getImageBitmap("firefox_logo.png");
 
       let loadingTask = getDocument(
         buildGetDocumentParams("pdfjs_wikipedia.pdf")
@@ -2579,13 +2729,8 @@ describe("api", function () {
       if (isNodeJS) {
         pending("Cannot create a bitmap from Node.js.");
       }
+      const blob = await getImageBlob("firefox_logo.png");
 
-      const TEST_IMAGES_PATH = "../images/";
-      const filename = "firefox_logo.png";
-      const path = new URL(TEST_IMAGES_PATH + filename, window.location).href;
-
-      const response = await fetch(path);
-      const blob = await response.blob();
       let loadingTask, pdfDoc;
       let data = buildGetDocumentParams("empty.pdf");
 
@@ -2645,18 +2790,11 @@ describe("api", function () {
       await loadingTask.destroy();
     });
 
-    it("write a new stamp annotation in a non-tagged pdf, save and check that the structure tree", async function () {
+    it("write a new stamp annotation in a non-tagged pdf, save and check the structure tree", async function () {
       if (isNodeJS) {
         pending("Cannot create a bitmap from Node.js.");
       }
-
-      const TEST_IMAGES_PATH = "../images/";
-      const filename = "firefox_logo.png";
-      const path = new URL(TEST_IMAGES_PATH + filename, window.location).href;
-
-      const response = await fetch(path);
-      const blob = await response.blob();
-      const bitmap = await createImageBitmap(blob);
+      const bitmap = await getImageBitmap("firefox_logo.png");
 
       let loadingTask = getDocument(buildGetDocumentParams("empty.pdf"));
       let pdfDoc = await loadingTask.promise;
@@ -2705,14 +2843,7 @@ describe("api", function () {
       if (isNodeJS) {
         pending("Cannot create a bitmap from Node.js.");
       }
-
-      const TEST_IMAGES_PATH = "../images/";
-      const filename = "firefox_logo.png";
-      const path = new URL(TEST_IMAGES_PATH + filename, window.location).href;
-
-      const response = await fetch(path);
-      const blob = await response.blob();
-      const bitmap = await createImageBitmap(blob);
+      const bitmap = await getImageBitmap("firefox_logo.png");
 
       let loadingTask = getDocument(buildGetDocumentParams("empty.pdf"));
       let pdfDoc = await loadingTask.promise;
@@ -2767,6 +2898,75 @@ describe("api", function () {
         ],
         role: "Root",
       });
+
+      await loadingTask.destroy();
+    });
+
+    it("write an highlight annotation and delete its popup", async function () {
+      let loadingTask = getDocument(
+        buildGetDocumentParams("highlight_popup.pdf")
+      );
+      let pdfDoc = await loadingTask.promise;
+      pdfDoc.annotationStorage.setValue("pdfjs_internal_editor_0", {
+        deleted: true,
+        id: "24R",
+        pageIndex: 0,
+        popupRef: "25R",
+      });
+      const data = await pdfDoc.saveDocument();
+      await loadingTask.destroy();
+
+      loadingTask = getDocument(data);
+      pdfDoc = await loadingTask.promise;
+      const page = await pdfDoc.getPage(1);
+      const annotations = await page.getAnnotations();
+
+      expect(annotations).toEqual([]);
+      await loadingTask.destroy();
+    });
+
+    it("write an updated stamp annotation in a tagged pdf, save and check the structure tree", async function () {
+      let loadingTask = getDocument(buildGetDocumentParams("stamps.pdf"));
+      let pdfDoc = await loadingTask.promise;
+      pdfDoc.annotationStorage.setValue("pdfjs_internal_editor_1", {
+        annotationType: AnnotationEditorType.STAMP,
+        pageIndex: 0,
+        rect: [72.5, 134.17, 246.49, 318.7],
+        rotation: 0,
+        isSvg: false,
+        structTreeParentId: null,
+        accessibilityData: {
+          type: "Figure",
+          alt: "The Firefox logo",
+          structParent: -1,
+        },
+        id: "34R",
+      });
+      pdfDoc.annotationStorage.setValue("pdfjs_internal_editor_4", {
+        annotationType: AnnotationEditorType.STAMP,
+        pageIndex: 0,
+        rect: [335.1, 394.83, 487.17, 521.47],
+        rotation: 0,
+        isSvg: false,
+        structTreeParentId: null,
+        accessibilityData: {
+          type: "Figure",
+          alt: "An elephant with a red hat",
+          structParent: 0,
+        },
+        id: "58R",
+      });
+
+      const data = await pdfDoc.saveDocument();
+      await loadingTask.destroy();
+
+      loadingTask = getDocument(data);
+      pdfDoc = await loadingTask.promise;
+      const page = await pdfDoc.getPage(1);
+      const tree = await page.getStructTree();
+
+      expect(tree.children[0].alt).toEqual("An elephant with a red hat");
+      expect(tree.children[1].alt).toEqual("The Firefox logo");
 
       await loadingTask.destroy();
     });
@@ -3420,6 +3620,21 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       await loadingTask.destroy();
     });
 
+    it("gets text content, correctly handling documents with toUnicode cmaps that omit leading zeros on hex-encoded UTF-16", async function () {
+      const loadingTask = getDocument(
+        buildGetDocumentParams("issue18099_reduced.pdf")
+      );
+      const pdfDoc = await loadingTask.promise;
+      const pdfPage = await pdfDoc.getPage(1);
+      const { items } = await pdfPage.getTextContent({
+        disableNormalization: true,
+      });
+      const text = mergeText(items);
+      expect(text).toEqual("Hello world!");
+
+      await loadingTask.destroy();
+    });
+
     it("gets text content, and check that out-of-page text is not present (bug 1755201)", async function () {
       if (isNodeJS) {
         pending("Linked test-cases are not supported in Node.js.");
@@ -3599,6 +3814,188 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
                   {
                     role: "NonStruct",
                     children: [{ type: "content", id: "p2R_mc3" }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+
+      await loadingTask.destroy();
+    });
+
+    it("gets corrupt structure tree with non-dictionary nodes (issue 18503)", async function () {
+      if (isNodeJS) {
+        pending("Linked test-cases are not supported in Node.js.");
+      }
+
+      const loadingTask = getDocument(buildGetDocumentParams("issue18503.pdf"));
+      const pdfDoc = await loadingTask.promise;
+      const pdfPage = await pdfDoc.getPage(1);
+      const tree = await pdfPage.getStructTree();
+
+      expect(tree).toEqual({
+        role: "Root",
+        children: [
+          {
+            role: "Document",
+            lang: "en-US",
+            children: [
+              {
+                role: "Sect",
+                children: [
+                  {
+                    role: "P",
+                    children: [{ type: "content", id: "p406R_mc2" }],
+                  },
+                  {
+                    role: "Figure",
+                    children: [{ type: "content", id: "p406R_mc11" }],
+                    alt: "d h c s logo",
+                    bbox: [57.75, 676, 133.35, 752],
+                  },
+                  {
+                    role: "Figure",
+                    children: [{ type: "content", id: "p406R_mc1" }],
+                    alt: "Great Seal of the State of California",
+                    bbox: [481.5, 678, 544.5, 741],
+                  },
+                  {
+                    role: "P",
+                    children: [
+                      { type: "content", id: "p406R_mc3" },
+                      { type: "content", id: "p406R_mc5" },
+                      { type: "content", id: "p406R_mc7" },
+                    ],
+                  },
+                  {
+                    role: "P",
+                    children: [
+                      { type: "content", id: "p406R_mc4" },
+                      { type: "content", id: "p406R_mc6" },
+                    ],
+                  },
+                  {
+                    role: "P",
+                    children: [{ type: "content", id: "p406R_mc12" }],
+                  },
+                  {
+                    role: "P",
+                    children: [{ type: "content", id: "p406R_mc13" }],
+                  },
+                  {
+                    role: "P",
+                    children: [
+                      {
+                        role: "Span",
+                        children: [
+                          { type: "content", id: "p406R_mc15" },
+                          {
+                            role: "Note",
+                            children: [{ type: "content", id: "p406R_mc32" }],
+                          },
+                        ],
+                      },
+                      { type: "content", id: "p406R_mc14" },
+                      { type: "content", id: "p406R_mc16" },
+                    ],
+                  },
+                  {
+                    role: "H1",
+                    children: [{ type: "content", id: "p406R_mc17" }],
+                  },
+                ],
+              },
+              {
+                role: "Sect",
+                children: [
+                  {
+                    role: "H2",
+                    children: [{ type: "content", id: "p406R_mc18" }],
+                  },
+                  {
+                    role: "P",
+                    children: [{ type: "content", id: "p406R_mc19" }],
+                  },
+                ],
+              },
+              {
+                role: "Sect",
+                children: [
+                  {
+                    role: "H2",
+                    children: [{ type: "content", id: "p406R_mc20" }],
+                  },
+                  {
+                    role: "P",
+                    children: [
+                      { type: "content", id: "p406R_mc21" },
+                      {
+                        role: "Span",
+                        children: [
+                          { type: "content", id: "p406R_mc23" },
+                          {
+                            role: "Note",
+                            children: [
+                              { type: "content", id: "p406R_mc33" },
+                              {
+                                role: "Link",
+                                children: [
+                                  { type: "object", id: "432R" },
+                                  { type: "content", id: "p406R_mc34" },
+                                ],
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                      { type: "content", id: "p406R_mc22" },
+                      { type: "content", id: "p406R_mc24" },
+                      { type: "content", id: "p406R_mc25" },
+                      { type: "content", id: "p406R_mc26" },
+                      {
+                        role: "Span",
+                        children: [
+                          { type: "content", id: "p406R_mc28" },
+                          {
+                            role: "Note",
+                            children: [
+                              { type: "content", id: "p406R_mc35" },
+                              {
+                                role: "Link",
+                                children: [
+                                  { type: "object", id: "433R" },
+                                  { type: "content", id: "p406R_mc36" },
+                                ],
+                              },
+                              { type: "content", id: "p406R_mc37" },
+                            ],
+                          },
+                        ],
+                      },
+                      { type: "content", id: "p406R_mc29" },
+                      { type: "content", id: "p406R_mc27" },
+                      { type: "content", id: "p406R_mc30" },
+                    ],
+                  },
+                  {
+                    role: "P",
+                    children: [{ type: "content", id: "p406R_mc31" }],
+                  },
+                  {
+                    role: "P",
+                    children: [
+                      { type: "content", id: "p406R_mc8" },
+                      { type: "content", id: "p406R_mc9" },
+                      {
+                        role: "Link",
+                        children: [
+                          { type: "object", id: "434R" },
+                          { type: "content", id: "p406R_mc10" },
+                        ],
+                      },
+                    ],
                   },
                 ],
               },
@@ -4156,7 +4553,7 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
             checkedCopyLocalImage = true;
             // Ensure that the image was copied in the main-thread, rather
             // than being re-parsed in the worker-thread (which is slower).
-            expect(statsOverall).toBeLessThan(firstStatsOverall / 4);
+            expect(statsOverall).toBeLessThan(firstStatsOverall / 2);
           }
         }
       }
@@ -4559,34 +4956,5 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
         await loadingTask.destroy();
       }
     );
-  });
-
-  describe("PDFWorkerUtil", function () {
-    describe("isSameOrigin", function () {
-      const { isSameOrigin } = PDFWorkerUtil;
-
-      it("handles invalid base URLs", function () {
-        // The base URL is not valid.
-        expect(isSameOrigin("/foo", "/bar")).toEqual(false);
-
-        // The base URL has no origin.
-        expect(isSameOrigin("blob:foo", "/bar")).toEqual(false);
-      });
-
-      it("correctly checks if the origin of both URLs matches", function () {
-        expect(
-          isSameOrigin(
-            "https://www.mozilla.org/foo",
-            "https://www.mozilla.org/bar"
-          )
-        ).toEqual(true);
-        expect(
-          isSameOrigin(
-            "https://www.mozilla.org/foo",
-            "https://www.example.com/bar"
-          )
-        ).toEqual(false);
-      });
-    });
   });
 });

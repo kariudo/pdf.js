@@ -26,6 +26,7 @@
 import {
   AbortException,
   AnnotationMode,
+  OutputScale,
   PixelsPerInch,
   RenderingCancelledException,
   setLayerDimensions,
@@ -33,10 +34,10 @@ import {
 } from "pdfjs-lib";
 import {
   approximateFraction,
+  calcRound,
   DEFAULT_SCALE,
-  OutputScale,
+  floorToDivide,
   RenderingStates,
-  roundToDivide,
   TextLayerMode,
 } from "./ui_utils.js";
 import { AnnotationEditorLayerBuilder } from "./annotation_editor_layer_builder.js";
@@ -81,6 +82,8 @@ import { XfaLayerBuilder } from "./xfa_layer_builder.js";
  * @property {IL10n} [l10n] - Localization service.
  * @property {Object} [layerProperties] - The object that is used to lookup
  *   the necessary layer-properties.
+ * @property {boolean} [enableHWA] - Enables hardware acceleration for
+ *   rendering. The default value is `false`.
  */
 
 const DEFAULT_LAYER_PROPERTIES =
@@ -113,13 +116,21 @@ const LAYERS_ORDER = new Map([
 class PDFPageView {
   #annotationMode = AnnotationMode.ENABLE_FORMS;
 
+  #enableHWA = false;
+
   #hasRestrictedScaling = false;
+
+  #isEditing = false;
 
   #layerProperties = null;
 
   #loadingId = null;
 
   #previousRotation = null;
+
+  #scaleRoundX = 1;
+
+  #scaleRoundY = 1;
 
   #renderError = null;
 
@@ -163,6 +174,7 @@ class PDFPageView {
     this.maxCanvasPixels =
       options.maxCanvasPixels ?? AppOptions.get("maxCanvasPixels");
     this.pageColors = options.pageColors || null;
+    this.#enableHWA = options.enableHWA || false;
 
     this.eventBus = options.eventBus;
     this.renderingQueue = options.renderingQueue;
@@ -209,6 +221,13 @@ class PDFPageView {
         "--scale-factor",
         this.scale * PixelsPerInch.PDF_TO_CSS_UNITS
       );
+
+      if (this.pageColors?.background) {
+        container?.style.setProperty(
+          "--page-bg-color",
+          this.pageColors.background
+        );
+      }
 
       const { optionalContentConfigPromise } = options;
       if (optionalContentConfigPromise) {
@@ -349,6 +368,10 @@ class PDFPageView {
     this.pdfPage?.cleanup();
   }
 
+  hasEditableAnnotations() {
+    return !!this.annotationLayer?.hasEditableAnnotations();
+  }
+
   get _textHighlighter() {
     return shadow(
       this,
@@ -372,7 +395,11 @@ class PDFPageView {
   async #renderAnnotationLayer() {
     let error = null;
     try {
-      await this.annotationLayer.render(this.viewport, "display");
+      await this.annotationLayer.render(
+        this.viewport,
+        { structTreeLayer: this.structTreeLayer },
+        "display"
+      );
     } catch (ex) {
       console.error(`#renderAnnotationLayer: "${ex}".`);
       error = ex;
@@ -457,16 +484,15 @@ class PDFPageView {
     if (!this.textLayer) {
       return;
     }
-    this.structTreeLayer ||= new StructTreeLayerBuilder();
 
-    const tree = await (!this.structTreeLayer.renderingDone
-      ? this.pdfPage.getStructTree()
-      : null);
-    const treeDom = this.structTreeLayer?.render(tree);
+    const treeDom = await this.structTreeLayer?.render();
     if (treeDom) {
-      // Pause translation when inserting the structTree in the DOM.
       this.l10n.pause();
-      this.canvas?.append(treeDom);
+      this.structTreeLayer?.addElementsToTextLayer();
+      if (this.canvas && treeDom.parentNode !== this.canvas) {
+        // Pause translation when inserting the structTree in the DOM.
+        this.canvas.append(treeDom);
+      }
       this.l10n.resume();
     }
     this.structTreeLayer?.show();
@@ -575,6 +601,20 @@ class PDFPageView {
       }
       this._resetZoomLayer();
     }
+  }
+
+  toggleEditingMode(isEditing) {
+    if (!this.hasEditableAnnotations()) {
+      return;
+    }
+    this.#isEditing = isEditing;
+    this.reset({
+      keepZoomLayer: true,
+      keepAnnotationLayer: true,
+      keepAnnotationEditorLayer: true,
+      keepXfaLayer: true,
+      keepTextLayer: true,
+    });
   }
 
   /**
@@ -735,9 +775,6 @@ class PDFPageView {
       this.textLayer.cancel();
       this.textLayer = null;
     }
-    if (this.structTreeLayer && !this.textLayer) {
-      this.structTreeLayer = null;
-    }
     if (
       this.annotationLayer &&
       (!keepAnnotationLayer || !this.annotationLayer.div)
@@ -745,6 +782,9 @@ class PDFPageView {
       this.annotationLayer.cancel();
       this.annotationLayer = null;
       this._annotationCanvasMap = null;
+    }
+    if (this.structTreeLayer && !this.textLayer) {
+      this.structTreeLayer = null;
     }
     if (
       this.annotationEditorLayer &&
@@ -981,7 +1021,10 @@ class PDFPageView {
     canvasWrapper.append(canvas);
     this.canvas = canvas;
 
-    const ctx = canvas.getContext("2d", { alpha: false });
+    const ctx = canvas.getContext("2d", {
+      alpha: false,
+      willReadFrequently: !this.#enableHWA,
+    });
     const outputScale = (this.outputScale = new OutputScale());
 
     if (
@@ -1008,11 +1051,27 @@ class PDFPageView {
     const sfx = approximateFraction(outputScale.sx);
     const sfy = approximateFraction(outputScale.sy);
 
-    canvas.width = roundToDivide(width * outputScale.sx, sfx[0]);
-    canvas.height = roundToDivide(height * outputScale.sy, sfy[0]);
-    const { style } = canvas;
-    style.width = roundToDivide(width, sfx[1]) + "px";
-    style.height = roundToDivide(height, sfy[1]) + "px";
+    const canvasWidth = (canvas.width = floorToDivide(
+      calcRound(width * outputScale.sx),
+      sfx[0]
+    ));
+    const canvasHeight = (canvas.height = floorToDivide(
+      calcRound(height * outputScale.sy),
+      sfy[0]
+    ));
+    const pageWidth = floorToDivide(calcRound(width), sfx[1]);
+    const pageHeight = floorToDivide(calcRound(height), sfy[1]);
+    outputScale.sx = canvasWidth / pageWidth;
+    outputScale.sy = canvasHeight / pageHeight;
+
+    if (this.#scaleRoundX !== sfx[1]) {
+      div.style.setProperty("--scale-round-x", `${sfx[1]}px`);
+      this.#scaleRoundX = sfx[1];
+    }
+    if (this.#scaleRoundY !== sfy[1]) {
+      div.style.setProperty("--scale-round-y", `${sfy[1]}px`);
+      this.#scaleRoundY = sfy[1];
+    }
 
     // Add the viewport so it's known what it was originally drawn with.
     this.#viewportMap.set(canvas, viewport);
@@ -1029,6 +1088,7 @@ class PDFPageView {
       optionalContentConfigPromise: this._optionalContentConfigPromise,
       annotationCanvasMap: this._annotationCanvasMap,
       pageColors,
+      isEditing: this.#isEditing,
     };
     const renderTask = (this.renderTask = pdfPage.render(renderContext));
     renderTask.onContinue = renderContinueCallback;
@@ -1037,6 +1097,11 @@ class PDFPageView {
       async () => {
         showCanvas?.(true);
         await this.#finishRenderTask(renderTask);
+
+        this.structTreeLayer ||= new StructTreeLayerBuilder(
+          pdfPage,
+          viewport.rawDims
+        );
 
         this.#renderTextLayer();
 
@@ -1049,27 +1114,25 @@ class PDFPageView {
         if (!annotationEditorUIManager) {
           return;
         }
-
         this.drawLayer ||= new DrawLayerBuilder({
           pageIndex: this.id,
         });
         await this.#renderDrawLayer();
         this.drawLayer.setParent(canvasWrapper);
 
-        if (!this.annotationEditorLayer) {
-          this.annotationEditorLayer = new AnnotationEditorLayerBuilder({
-            uiManager: annotationEditorUIManager,
-            pdfPage,
-            l10n,
-            accessibilityManager: this._accessibilityManager,
-            annotationLayer: this.annotationLayer?.annotationLayer,
-            textLayer: this.textLayer,
-            drawLayer: this.drawLayer.getDrawLayer(),
-            onAppend: annotationEditorLayerDiv => {
-              this.#addLayer(annotationEditorLayerDiv, "annotationEditorLayer");
-            },
-          });
-        }
+        this.annotationEditorLayer ||= new AnnotationEditorLayerBuilder({
+          uiManager: annotationEditorUIManager,
+          pdfPage,
+          l10n,
+          structTreeLayer: this.structTreeLayer,
+          accessibilityManager: this._accessibilityManager,
+          annotationLayer: this.annotationLayer?.annotationLayer,
+          textLayer: this.textLayer,
+          drawLayer: this.drawLayer.getDrawLayer(),
+          onAppend: annotationEditorLayerDiv => {
+            this.#addLayer(annotationEditorLayerDiv, "annotationEditorLayer");
+          },
+        });
         this.#renderAnnotationEditorLayer();
       },
       error => {

@@ -47,6 +47,7 @@ import { FlateStream } from "../../src/core/flate_stream.js";
 import { PartialEvaluator } from "../../src/core/evaluator.js";
 import { StringStream } from "../../src/core/stream.js";
 import { WorkerTask } from "../../src/core/worker.js";
+import { writeChanges } from "../../src/core/writer.js";
 
 describe("annotation", function () {
   class PDFManagerMock {
@@ -1768,7 +1769,6 @@ describe("annotation", function () {
         partialEvaluator,
         task,
         RenderingIntentFlag.PRINT,
-        false,
         annotationStorage
       );
       expect(opList.argsArray.length).toEqual(3);
@@ -1851,7 +1851,7 @@ describe("annotation", function () {
       const utf16String =
         "\x30\x53\x30\x93\x30\x6b\x30\x61\x30\x6f\x4e\x16\x75\x4c\x30\x6e";
       expect(appearance).toEqual(
-        "/Tx BMC q BT /Goth 5.92 Tf 0 g 1 0 0 1 0 0 Tm" +
+        "/Tx BMC q BT /Goth 3.5 Tf 0 g 1 0 0 1 0 0 Tm" +
           ` 2 3.07 Td (${utf16String}) Tj ET Q EMC`
       );
     });
@@ -2121,14 +2121,12 @@ describe("annotation", function () {
       );
       const annotationStorage = new Map();
       annotationStorage.set(annotation.data.id, { value: "hello world" });
+      const changes = new RefSetCache();
 
-      const data = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      const data = await writeChanges(changes, xref);
       expect(data.length).toEqual(2);
-      const [oldData, newData] = data;
+      const [newData, oldData] = data;
       expect(oldData.ref).toEqual(Ref.get(123, 0));
       expect(newData.ref).toEqual(Ref.get(2, 0));
 
@@ -2144,6 +2142,81 @@ describe("annotation", function () {
           "<< /Font << /Helv 314 0 R>>>> /BBox [0 0 32 10] /Length 74>> stream\n" +
           "/Tx BMC q BT /Helv 5 Tf 1 0 0 1 0 0 Tm 2 3.07 Td (hello world) Tj " +
           "ET Q EMC\nendstream\nendobj\n"
+      );
+    });
+
+    it("should save the text in two fields with the same name", async function () {
+      const textWidget1Ref = Ref.get(123, 0);
+      const textWidget2Ref = Ref.get(124, 0);
+
+      const parentRef = Ref.get(125, 0);
+      textWidgetDict.set("Parent", parentRef);
+      const parentDict = new Dict();
+      parentDict.set("Kids", [textWidget1Ref, textWidget2Ref]);
+      parentDict.set("T", "foo");
+      const textWidget2Dict = textWidgetDict.clone();
+
+      const xref = new XRefMock([
+        { ref: textWidget1Ref, data: textWidgetDict },
+        { ref: textWidget2Ref, data: textWidget2Dict },
+        { ref: parentRef, data: parentDict },
+        helvRefObj,
+      ]);
+      partialEvaluator.xref = xref;
+      const task = new WorkerTask("test save");
+
+      const annotation1 = await AnnotationFactory.create(
+        xref,
+        textWidget1Ref,
+        annotationGlobalsMock,
+        idFactoryMock
+      );
+      const annotation2 = await AnnotationFactory.create(
+        xref,
+        textWidget2Ref,
+        annotationGlobalsMock,
+        idFactoryMock
+      );
+      const annotationStorage = new Map();
+      annotationStorage.set(annotation1.data.id, { value: "hello world" });
+      annotationStorage.set(annotation2.data.id, { value: "hello world" });
+      const changes = new RefSetCache();
+
+      await annotation1.save(
+        partialEvaluator,
+        task,
+        annotationStorage,
+        changes
+      );
+      await annotation2.save(
+        partialEvaluator,
+        task,
+        annotationStorage,
+        changes
+      );
+      const data = await writeChanges(changes, xref);
+      expect(data.length).toEqual(5);
+      const [, , data1, data2, parentData] = data;
+      expect(data1.ref).toEqual(textWidget1Ref);
+      expect(data2.ref).toEqual(textWidget2Ref);
+      expect(parentData.ref).toEqual(parentRef);
+
+      data1.data = data1.data.replace(/\(D:\d+\)/, "(date)");
+      data2.data = data2.data.replace(/\(D:\d+\)/, "(date)");
+      expect(data1.data).toEqual(
+        "123 0 obj\n" +
+          "<< /Type /Annot /Subtype /Widget /FT /Tx /DA (/Helv 5 Tf) /DR " +
+          "<< /Font << /Helv 314 0 R>>>> /Rect [0 0 32 10] " +
+          "/Parent 125 0 R /AP << /N 4 0 R>> /M (date)>>\nendobj\n"
+      );
+      expect(data2.data).toEqual(
+        "124 0 obj\n" +
+          "<< /Type /Annot /Subtype /Widget /FT /Tx /DA (/Helv 5 Tf) /DR " +
+          "<< /Font << /Helv 314 0 R>>>> /Rect [0 0 32 10] " +
+          "/Parent 125 0 R /AP << /N 5 0 R>> /M (date)>>\nendobj\n"
+      );
+      expect(parentData.data).toEqual(
+        "125 0 obj\n<< /Kids [123 0 R 124 0 R] /T (foo) /V (hello world)>>\nendobj\n"
       );
     });
 
@@ -2167,14 +2240,12 @@ describe("annotation", function () {
         value: "hello world",
         rotation: 90,
       });
+      const changes = new RefSetCache();
 
-      const data = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      const data = await writeChanges(changes, xref);
       expect(data.length).toEqual(2);
-      const [oldData, newData] = data;
+      const [newData, oldData] = data;
       expect(oldData.ref).toEqual(Ref.get(123, 0));
       expect(newData.ref).toEqual(Ref.get(2, 0));
 
@@ -2211,14 +2282,12 @@ describe("annotation", function () {
       const annotationStorage = new Map();
       const value = "a".repeat(256);
       annotationStorage.set(annotation.data.id, { value });
+      const changes = new RefSetCache();
 
-      const data = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      const data = await writeChanges(changes, xref);
       expect(data.length).toEqual(2);
-      const [oldData, newData] = data;
+      const [newData, oldData] = data;
       expect(oldData.ref).toEqual(Ref.get(123, 0));
       expect(newData.ref).toEqual(Ref.get(2, 0));
 
@@ -2357,16 +2426,14 @@ describe("annotation", function () {
       annotationStorage.set(annotation.data.id, {
         value: "こんにちは世界の",
       });
+      const changes = new RefSetCache();
 
-      const data = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      const data = await writeChanges(changes, xref);
       const utf16String =
         "\x30\x53\x30\x93\x30\x6b\x30\x61\x30\x6f\x4e\x16\x75\x4c\x30\x6e";
       expect(data.length).toEqual(2);
-      const [oldData, newData] = data;
+      const [newData, oldData] = data;
       expect(oldData.ref).toEqual(Ref.get(123, 0));
       expect(newData.ref).toEqual(Ref.get(2, 0));
 
@@ -2523,7 +2590,6 @@ describe("annotation", function () {
         checkboxEvaluator,
         task,
         RenderingIntentFlag.PRINT,
-        false,
         annotationStorage
       );
       expect(opList.argsArray.length).toEqual(5);
@@ -2584,7 +2650,6 @@ describe("annotation", function () {
         partialEvaluator,
         task,
         RenderingIntentFlag.PRINT,
-        false,
         annotationStorage
       );
       expect(opList1.argsArray.length).toEqual(3);
@@ -2608,7 +2673,6 @@ describe("annotation", function () {
         partialEvaluator,
         task,
         RenderingIntentFlag.PRINT,
-        false,
         annotationStorage
       );
       expect(opList2.argsArray.length).toEqual(3);
@@ -2670,7 +2734,6 @@ describe("annotation", function () {
           partialEvaluator,
           task,
           RenderingIntentFlag.PRINT,
-          false,
           annotationStorage
         );
         expect(opList.argsArray.length).toEqual(3);
@@ -2732,7 +2795,6 @@ describe("annotation", function () {
         partialEvaluator,
         task,
         RenderingIntentFlag.PRINT,
-        false,
         annotationStorage
       );
       expect(opList.argsArray.length).toEqual(3);
@@ -2777,12 +2839,10 @@ describe("annotation", function () {
       );
       const annotationStorage = new Map();
       annotationStorage.set(annotation.data.id, { value: true });
+      const changes = new RefSetCache();
 
-      const [oldData] = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      const [oldData] = await writeChanges(changes, xref);
       oldData.data = oldData.data.replace(/\(D:\d+\)/, "(date)");
       expect(oldData.ref).toEqual(Ref.get(123, 0));
       expect(oldData.data).toEqual(
@@ -2794,12 +2854,9 @@ describe("annotation", function () {
 
       annotationStorage.set(annotation.data.id, { value: false });
 
-      const data = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
-      expect(data).toEqual(null);
+      changes.clear();
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      expect(changes.size).toEqual(0);
     });
 
     it("should save rotated checkboxes", async function () {
@@ -2828,12 +2885,10 @@ describe("annotation", function () {
       );
       const annotationStorage = new Map();
       annotationStorage.set(annotation.data.id, { value: true, rotation: 180 });
+      const changes = new RefSetCache();
 
-      const [oldData] = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      const [oldData] = await writeChanges(changes, xref);
       oldData.data = oldData.data.replace(/\(D:\d+\)/, "(date)");
       expect(oldData.ref).toEqual(Ref.get(123, 0));
       expect(oldData.data).toEqual(
@@ -2845,12 +2900,9 @@ describe("annotation", function () {
 
       annotationStorage.set(annotation.data.id, { value: false });
 
-      const data = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
-      expect(data).toEqual(null);
+      changes.clear();
+      await annotation.save(partialEvaluator, task, annotationStorage);
+      expect(changes.size).toEqual(0);
     });
 
     it("should handle radio buttons with a field value", async function () {
@@ -2986,7 +3038,6 @@ describe("annotation", function () {
         partialEvaluator,
         task,
         RenderingIntentFlag.PRINT,
-        false,
         annotationStorage
       );
       expect(opList1.argsArray.length).toEqual(3);
@@ -3010,7 +3061,6 @@ describe("annotation", function () {
         partialEvaluator,
         task,
         RenderingIntentFlag.PRINT,
-        false,
         annotationStorage
       );
       expect(opList2.argsArray.length).toEqual(3);
@@ -3070,7 +3120,6 @@ describe("annotation", function () {
         partialEvaluator,
         task,
         RenderingIntentFlag.PRINT,
-        false,
         annotationStorage
       );
       expect(opList.argsArray.length).toEqual(3);
@@ -3106,6 +3155,7 @@ describe("annotation", function () {
       const parentDict = new Dict();
       parentDict.set("V", Name.get("Off"));
       parentDict.set("Kids", [buttonWidgetRef]);
+      parentDict.set("T", "RadioGroup");
       buttonWidgetDict.set("Parent", parentRef);
 
       const xref = new XRefMock([
@@ -3126,12 +3176,10 @@ describe("annotation", function () {
       );
       const annotationStorage = new Map();
       annotationStorage.set(annotation.data.id, { value: true });
+      const changes = new RefSetCache();
 
-      let data = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      const data = await writeChanges(changes, xref);
       expect(data.length).toEqual(2);
       const [radioData, parentData] = data;
       radioData.data = radioData.data.replace(/\(D:\d+\)/, "(date)");
@@ -3144,13 +3192,14 @@ describe("annotation", function () {
       );
       expect(parentData.ref).toEqual(Ref.get(456, 0));
       expect(parentData.data).toEqual(
-        "456 0 obj\n<< /V /Checked /Kids [123 0 R]>>\nendobj\n"
+        "456 0 obj\n<< /V /Checked /Kids [123 0 R] /T (RadioGroup)>>\nendobj\n"
       );
 
       annotationStorage.set(annotation.data.id, { value: false });
 
-      data = await annotation.save(partialEvaluator, task, annotationStorage);
-      expect(data).toEqual(null);
+      changes.clear();
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      expect(changes.size).toEqual(0);
     });
 
     it("should save radio buttons without a field value", async function () {
@@ -3169,6 +3218,7 @@ describe("annotation", function () {
 
       const parentDict = new Dict();
       parentDict.set("Kids", [buttonWidgetRef]);
+      parentDict.set("T", "RadioGroup");
       buttonWidgetDict.set("Parent", parentRef);
 
       const xref = new XRefMock([
@@ -3189,12 +3239,10 @@ describe("annotation", function () {
       );
       const annotationStorage = new Map();
       annotationStorage.set(annotation.data.id, { value: true });
+      const changes = new RefSetCache();
 
-      const data = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      const data = await writeChanges(changes, xref);
       expect(data.length).toEqual(2);
       const [radioData, parentData] = data;
       radioData.data = radioData.data.replace(/\(D:\d+\)/, "(date)");
@@ -3207,7 +3255,7 @@ describe("annotation", function () {
       );
       expect(parentData.ref).toEqual(Ref.get(456, 0));
       expect(parentData.data).toEqual(
-        "456 0 obj\n<< /Kids [123 0 R] /V /Checked>>\nendobj\n"
+        "456 0 obj\n<< /Kids [123 0 R] /T (RadioGroup) /V /Checked>>\nendobj\n"
       );
     });
 
@@ -3225,13 +3273,10 @@ describe("annotation", function () {
         idFactoryMock
       );
       const annotationStorage = new Map();
+      const changes = new RefSetCache();
 
-      const data = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
-      expect(data).toEqual(null);
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      expect(changes.size).toEqual(0);
     });
 
     it("should handle push buttons", async function () {
@@ -3743,14 +3788,12 @@ describe("annotation", function () {
       );
       const annotationStorage = new Map();
       annotationStorage.set(annotation.data.id, { value: "C", rotation: 270 });
+      const changes = new RefSetCache();
 
-      const data = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      const data = await writeChanges(changes, xref);
       expect(data.length).toEqual(2);
-      const [oldData, newData] = data;
+      const [newData, oldData] = data;
       expect(oldData.ref).toEqual(Ref.get(123, 0));
       expect(newData.ref).toEqual(Ref.get(2, 0));
 
@@ -3804,14 +3847,12 @@ describe("annotation", function () {
       );
       const annotationStorage = new Map();
       annotationStorage.set(annotation.data.id, { value: "C" });
+      const changes = new RefSetCache();
 
-      const data = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      const data = await writeChanges(changes, xref);
       expect(data.length).toEqual(2);
-      const [oldData, newData] = data;
+      const [newData, oldData] = data;
       expect(oldData.ref).toEqual(Ref.get(123, 0));
       expect(newData.ref).toEqual(Ref.get(2, 0));
 
@@ -3869,15 +3910,12 @@ describe("annotation", function () {
       );
       const annotationStorage = new Map();
       annotationStorage.set(annotation.data.id, { value: ["B", "C"] });
+      const changes = new RefSetCache();
 
-      const data = await annotation.save(
-        partialEvaluator,
-        task,
-        annotationStorage
-      );
-
+      await annotation.save(partialEvaluator, task, annotationStorage, changes);
+      const data = await writeChanges(changes, xref);
       expect(data.length).toEqual(2);
-      const [oldData, newData] = data;
+      const [newData, oldData] = data;
       expect(oldData.ref).toEqual(Ref.get(123, 0));
       expect(newData.ref).toEqual(Ref.get(2, 0));
 
@@ -4163,9 +4201,10 @@ describe("annotation", function () {
 
   describe("FreeTextAnnotation", () => {
     it("should create a new FreeText annotation", async () => {
-      partialEvaluator.xref = new XRefMock();
+      const xref = (partialEvaluator.xref = new XRefMock());
       const task = new WorkerTask("test FreeText creation");
-      const data = await AnnotationFactory.saveNewAnnotations(
+      const changes = new RefSetCache();
+      await AnnotationFactory.saveNewAnnotations(
         partialEvaluator,
         task,
         [
@@ -4177,10 +4216,13 @@ describe("annotation", function () {
             color: [0, 0, 0],
             value: "Hello PDF.js World!",
           },
-        ]
+        ],
+        null,
+        changes
       );
+      const data = await writeChanges(changes, xref);
 
-      const base = data.annotations[0].data.replace(/\(D:\d+\)/, "(date)");
+      const base = data[1].data.replace(/\(D:\d+\)/, "(date)");
       expect(base).toEqual(
         "2 0 obj\n" +
           "<< /Type /Annot /Subtype /FreeText /CreationDate (date) " +
@@ -4189,7 +4231,7 @@ describe("annotation", function () {
           "endobj\n"
       );
 
-      const font = data.dependencies[0].data;
+      const font = data[0].data;
       expect(font).toEqual(
         "1 0 obj\n" +
           "<< /BaseFont /Helvetica /Type /Font /Subtype /Type1 /Encoding " +
@@ -4197,7 +4239,7 @@ describe("annotation", function () {
           "endobj\n"
       );
 
-      const appearance = data.dependencies[1].data;
+      const appearance = data[2].data;
       expect(appearance).toEqual(
         "3 0 obj\n" +
           "<< /FormType 1 /Subtype /Form /Type /XObject /BBox [12 34 56 78] " +
@@ -4242,7 +4284,6 @@ describe("annotation", function () {
         partialEvaluator,
         task,
         RenderingIntentFlag.PRINT,
-        false,
         null
       );
 
@@ -4265,6 +4306,51 @@ describe("annotation", function () {
         OPS.restore,
         OPS.endAnnotation,
       ]);
+    });
+
+    it("should update an existing FreeText annotation", async function () {
+      const freeTextDict = new Dict();
+      freeTextDict.set("Type", Name.get("Annot"));
+      freeTextDict.set("Subtype", Name.get("FreeText"));
+      freeTextDict.set("CreationDate", "D:20190423");
+      freeTextDict.set("Foo", Name.get("Bar"));
+
+      const freeTextRef = Ref.get(143, 0);
+      const xref = (partialEvaluator.xref = new XRefMock([
+        { ref: freeTextRef, data: freeTextDict },
+      ]));
+      const changes = new RefSetCache();
+
+      const task = new WorkerTask("test FreeText update");
+      await AnnotationFactory.saveNewAnnotations(
+        partialEvaluator,
+        task,
+        [
+          {
+            annotationType: AnnotationEditorType.FREETEXT,
+            rect: [12, 34, 56, 78],
+            rotation: 0,
+            fontSize: 10,
+            color: [0, 0, 0],
+            value: "Hello PDF.js World !",
+            id: "143R",
+            ref: freeTextRef,
+            oldAnnotation: freeTextDict,
+          },
+        ],
+        null,
+        changes
+      );
+      const data = await writeChanges(changes, xref);
+
+      const base = data[2].data.replaceAll(/\(D:\d+\)/g, "(date)");
+      expect(base).toEqual(
+        "143 0 obj\n" +
+          "<< /Type /Annot /Subtype /FreeText /CreationDate (date) /Foo /Bar /M (date) " +
+          "/Rect [12 34 56 78] /DA (/Helv 10 Tf 0 g) /Contents (Hello PDF.js World !) " +
+          "/F 4 /Border [0 0 0] /Rotate 0 /AP << /N 2 0 R>>>>\n" +
+          "endobj\n"
+      );
     });
 
     it("should extract the text from a FreeText annotation", async function () {
@@ -4348,9 +4434,10 @@ describe("annotation", function () {
     });
 
     it("should create a new Ink annotation", async function () {
-      partialEvaluator.xref = new XRefMock();
+      const xref = (partialEvaluator.xref = new XRefMock());
+      const changes = new RefSetCache();
       const task = new WorkerTask("test Ink creation");
-      const data = await AnnotationFactory.saveNewAnnotations(
+      await AnnotationFactory.saveNewAnnotations(
         partialEvaluator,
         task,
         [
@@ -4377,10 +4464,13 @@ describe("annotation", function () {
               },
             ],
           },
-        ]
+        ],
+        null,
+        changes
       );
+      const data = await writeChanges(changes, xref);
 
-      const base = data.annotations[0].data.replace(/\(D:\d+\)/, "(date)");
+      const base = data[0].data.replace(/\(D:\d+\)/, "(date)");
       expect(base).toEqual(
         "1 0 obj\n" +
           "<< /Type /Annot /Subtype /Ink /CreationDate (date) /Rect [12 34 56 78] " +
@@ -4389,7 +4479,7 @@ describe("annotation", function () {
           "endobj\n"
       );
 
-      const appearance = data.dependencies[0].data;
+      const appearance = data[1].data;
       expect(appearance).toEqual(
         "2 0 obj\n" +
           "<< /FormType 1 /Subtype /Form /Type /XObject /BBox [12 34 56 78] /Length 129>> stream\n" +
@@ -4409,9 +4499,10 @@ describe("annotation", function () {
     });
 
     it("should create a new Ink annotation with some transparency", async function () {
-      partialEvaluator.xref = new XRefMock();
+      const xref = (partialEvaluator.xref = new XRefMock());
+      const changes = new RefSetCache();
       const task = new WorkerTask("test Ink creation");
-      const data = await AnnotationFactory.saveNewAnnotations(
+      await AnnotationFactory.saveNewAnnotations(
         partialEvaluator,
         task,
         [
@@ -4438,10 +4529,13 @@ describe("annotation", function () {
               },
             ],
           },
-        ]
+        ],
+        null,
+        changes
       );
+      const data = await writeChanges(changes, xref);
 
-      const base = data.annotations[0].data.replace(/\(D:\d+\)/, "(date)");
+      const base = data[0].data.replace(/\(D:\d+\)/, "(date)");
       expect(base).toEqual(
         "1 0 obj\n" +
           "<< /Type /Annot /Subtype /Ink /CreationDate (date) /Rect [12 34 56 78] " +
@@ -4450,7 +4544,7 @@ describe("annotation", function () {
           "endobj\n"
       );
 
-      const appearance = data.dependencies[0].data;
+      const appearance = data[1].data;
       expect(appearance).toEqual(
         "2 0 obj\n" +
           "<< /FormType 1 /Subtype /Form /Type /XObject /BBox [12 34 56 78] /Length 136 /Resources " +
@@ -4503,7 +4597,6 @@ describe("annotation", function () {
         partialEvaluator,
         task,
         RenderingIntentFlag.PRINT,
-        false,
         null
       );
 
@@ -4597,9 +4690,10 @@ describe("annotation", function () {
     });
 
     it("should create a new Highlight annotation", async function () {
-      partialEvaluator.xref = new XRefMock();
+      const xref = (partialEvaluator.xref = new XRefMock());
+      const changes = new RefSetCache();
       const task = new WorkerTask("test Highlight creation");
-      const data = await AnnotationFactory.saveNewAnnotations(
+      await AnnotationFactory.saveNewAnnotations(
         partialEvaluator,
         task,
         [
@@ -4615,10 +4709,13 @@ describe("annotation", function () {
               [12, 13, 14, 15],
             ],
           },
-        ]
+        ],
+        null,
+        changes
       );
+      const data = await writeChanges(changes, xref);
 
-      const base = data.annotations[0].data.replace(/\(D:\d+\)/, "(date)");
+      const base = data[0].data.replace(/\(D:\d+\)/, "(date)");
       expect(base).toEqual(
         "1 0 obj\n" +
           "<< /Type /Annot /Subtype /Highlight /CreationDate (date) /Rect [12 34 56 78] " +
@@ -4627,7 +4724,7 @@ describe("annotation", function () {
           "endobj\n"
       );
 
-      const appearance = data.dependencies[0].data;
+      const appearance = data[1].data;
       expect(appearance).toEqual(
         "2 0 obj\n" +
           "<< /FormType 1 /Subtype /Form /Type /XObject /BBox [12 34 56 78] " +
@@ -4672,7 +4769,6 @@ describe("annotation", function () {
         partialEvaluator,
         task,
         RenderingIntentFlag.PRINT,
-        false,
         null
       );
 
@@ -4688,9 +4784,10 @@ describe("annotation", function () {
     });
 
     it("should create a new free Highlight annotation", async function () {
-      partialEvaluator.xref = new XRefMock();
+      const xref = (partialEvaluator.xref = new XRefMock());
+      const changes = new RefSetCache();
       const task = new WorkerTask("test free Highlight creation");
-      const data = await AnnotationFactory.saveNewAnnotations(
+      await AnnotationFactory.saveNewAnnotations(
         partialEvaluator,
         task,
         [
@@ -4720,10 +4817,13 @@ describe("annotation", function () {
               points: [Float32Array.from([16, 17, 18, 19])],
             },
           },
-        ]
+        ],
+        null,
+        changes
       );
+      const data = await writeChanges(changes, xref);
 
-      const base = data.annotations[0].data.replace(/\(D:\d+\)/, "(date)");
+      const base = data[0].data.replace(/\(D:\d+\)/, "(date)");
       expect(base).toEqual(
         "1 0 obj\n" +
           "<< /Type /Annot /Subtype /Ink /CreationDate (date) /Rect [12 34 56 78] " +
@@ -4732,7 +4832,7 @@ describe("annotation", function () {
           "endobj\n"
       );
 
-      const appearance = data.dependencies[0].data;
+      const appearance = data[1].data;
       expect(appearance).toEqual(
         "2 0 obj\n" +
           "<< /FormType 1 /Subtype /Form /Type /XObject /BBox [12 34 56 78] " +
@@ -4791,7 +4891,6 @@ describe("annotation", function () {
         partialEvaluator,
         task,
         RenderingIntentFlag.PRINT,
-        false,
         null
       );
 

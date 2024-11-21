@@ -14,6 +14,7 @@
  */
 
 import { isPdfFile, PDFDataRangeTransport } from "pdfjs-lib";
+import { AppOptions } from "./app_options.js";
 import { BaseExternalServices } from "./external_services.js";
 import { BasePreferences } from "./preferences.js";
 import { DEFAULT_SCALE_VALUE } from "./ui_utils.js";
@@ -82,14 +83,6 @@ class FirefoxCom {
 class DownloadManager {
   #openBlobUrls = new WeakMap();
 
-  downloadUrl(url, filename, options = {}) {
-    FirefoxCom.request("download", {
-      originalUrl: url,
-      filename,
-      options,
-    });
-  }
-
   downloadData(data, filename, contentType) {
     const blobUrl = URL.createObjectURL(
       new Blob([data], { type: contentType })
@@ -140,16 +133,15 @@ class DownloadManager {
     return false;
   }
 
-  download(data, url, filename, options = {}) {
-    const blobUrl = URL.createObjectURL(
-      new Blob([data], { type: "application/pdf" })
-    );
+  download(data, url, filename) {
+    const blobUrl = data
+      ? URL.createObjectURL(new Blob([data], { type: "application/pdf" }))
+      : null;
 
     FirefoxCom.request("download", {
       blobUrl,
       originalUrl: url,
       filename,
-      options,
     });
   }
 }
@@ -157,6 +149,10 @@ class DownloadManager {
 class Preferences extends BasePreferences {
   async _readFromStorage(prefObj) {
     return FirefoxCom.requestAsync("getPreferences", prefObj);
+  }
+
+  async _writeToStorage(prefObj) {
+    return FirefoxCom.requestAsync("setPreferences", prefObj);
   }
 }
 
@@ -311,8 +307,191 @@ class FirefoxScripting {
 }
 
 class MLManager {
-  guess(data) {
-    return FirefoxCom.requestAsync("mlGuess", data);
+  #abortSignal = null;
+
+  #enabled = null;
+
+  #eventBus = null;
+
+  #ready = null;
+
+  #requestResolvers = null;
+
+  hasProgress = false;
+
+  static #AI_ALT_TEXT_MODEL_NAME = "moz-image-to-text";
+
+  constructor({
+    altTextLearnMoreUrl,
+    enableGuessAltText,
+    enableAltTextModelDownload,
+  }) {
+    // The `altTextLearnMoreUrl` is used to provide a link to the user to learn
+    // more about the "alt text" feature.
+    // The link is used in the Alt Text dialog or in the Image Settings.
+    this.altTextLearnMoreUrl = altTextLearnMoreUrl;
+    this.enableAltTextModelDownload = enableAltTextModelDownload;
+    this.enableGuessAltText = enableGuessAltText;
+  }
+
+  setEventBus(eventBus, abortSignal) {
+    this.#eventBus = eventBus;
+    this.#abortSignal = abortSignal;
+    eventBus._on(
+      "enablealttextmodeldownload",
+      ({ value }) => {
+        if (this.enableAltTextModelDownload === value) {
+          return;
+        }
+        if (value) {
+          this.downloadModel("altText");
+        } else {
+          this.deleteModel("altText");
+        }
+      },
+      { signal: abortSignal }
+    );
+    eventBus._on(
+      "enableguessalttext",
+      ({ value }) => {
+        this.toggleService("altText", value);
+      },
+      { signal: abortSignal }
+    );
+  }
+
+  async isEnabledFor(name) {
+    return this.enableGuessAltText && !!(await this.#enabled?.get(name));
+  }
+
+  isReady(name) {
+    return this.#ready?.has(name) ?? false;
+  }
+
+  async deleteModel(name) {
+    if (name !== "altText" || !this.enableAltTextModelDownload) {
+      return;
+    }
+    this.enableAltTextModelDownload = false;
+    this.#ready?.delete(name);
+    this.#enabled?.delete(name);
+    await this.toggleService("altText", false);
+    await FirefoxCom.requestAsync(
+      "mlDelete",
+      MLManager.#AI_ALT_TEXT_MODEL_NAME
+    );
+  }
+
+  async loadModel(name) {
+    if (name === "altText" && this.enableAltTextModelDownload) {
+      await this.#loadAltTextEngine(false);
+    }
+  }
+
+  async downloadModel(name) {
+    if (name !== "altText" || this.enableAltTextModelDownload) {
+      return null;
+    }
+    this.enableAltTextModelDownload = true;
+    return this.#loadAltTextEngine(true);
+  }
+
+  async guess(data) {
+    if (data?.name !== "altText") {
+      return null;
+    }
+    const resolvers = (this.#requestResolvers ||= new Set());
+    const resolver = Promise.withResolvers();
+    resolvers.add(resolver);
+
+    data.service = MLManager.#AI_ALT_TEXT_MODEL_NAME;
+
+    FirefoxCom.requestAsync("mlGuess", data)
+      .then(response => {
+        if (resolvers.has(resolver)) {
+          resolver.resolve(response);
+          resolvers.delete(resolver);
+        }
+      })
+      .catch(reason => {
+        if (resolvers.has(resolver)) {
+          resolver.reject(reason);
+          resolvers.delete(resolver);
+        }
+      });
+
+    return resolver.promise;
+  }
+
+  async #cancelAllRequests() {
+    if (!this.#requestResolvers) {
+      return;
+    }
+    for (const resolver of this.#requestResolvers) {
+      resolver.resolve({ cancel: true });
+    }
+    this.#requestResolvers.clear();
+    this.#requestResolvers = null;
+  }
+
+  async toggleService(name, enabled) {
+    if (name !== "altText" || this.enableGuessAltText === enabled) {
+      return;
+    }
+
+    this.enableGuessAltText = enabled;
+    if (enabled) {
+      if (this.enableAltTextModelDownload) {
+        await this.#loadAltTextEngine(false);
+      }
+    } else {
+      this.#cancelAllRequests();
+    }
+  }
+
+  async #loadAltTextEngine(listenToProgress) {
+    if (this.#enabled?.has("altText")) {
+      // We already have a promise for the "altText" service.
+      return;
+    }
+    this.#ready ||= new Set();
+    const promise = FirefoxCom.requestAsync("loadAIEngine", {
+      service: MLManager.#AI_ALT_TEXT_MODEL_NAME,
+      listenToProgress,
+    }).then(ok => {
+      if (ok) {
+        this.#ready.add("altText");
+      }
+      return ok;
+    });
+    (this.#enabled ||= new Map()).set("altText", promise);
+    if (listenToProgress) {
+      const ac = new AbortController();
+      const signal = AbortSignal.any([this.#abortSignal, ac.signal]);
+
+      this.hasProgress = true;
+      window.addEventListener(
+        "loadAIEngineProgress",
+        ({ detail }) => {
+          this.#eventBus.dispatch("loadaiengineprogress", {
+            source: this,
+            detail,
+          });
+          if (detail.finished) {
+            ac.abort();
+            this.hasProgress = false;
+          }
+        },
+        { signal }
+      );
+      promise.then(ok => {
+        if (!ok) {
+          ac.abort();
+          this.hasProgress = false;
+        }
+      });
+    }
+    await promise;
   }
 }
 
@@ -394,26 +573,16 @@ class ExternalServices extends BaseExternalServices {
   }
 
   async createL10n() {
-    const [localeProperties] = await Promise.all([
-      FirefoxCom.requestAsync("getLocaleProperties", null),
-      document.l10n.ready,
-    ]);
-    return new L10n(localeProperties, document.l10n);
+    await document.l10n.ready;
+    return new L10n(AppOptions.get("localeProperties"), document.l10n);
   }
 
   createScripting() {
     return FirefoxScripting;
   }
 
-  async getNimbusExperimentData() {
-    if (!PDFJSDev.test("GECKOVIEW")) {
-      return null;
-    }
-    const nimbusData = await FirefoxCom.requestAsync(
-      "getNimbusExperimentData",
-      null
-    );
-    return nimbusData && JSON.parse(nimbusData);
+  dispatchGlobalEvent(event) {
+    FirefoxCom.request("dispatchGlobalEvent", event);
   }
 }
 

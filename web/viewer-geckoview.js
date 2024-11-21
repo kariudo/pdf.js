@@ -60,9 +60,6 @@ function getViewerConfiguration() {
 function webViewerLoad() {
   const config = getViewerConfiguration();
 
-  if (typeof PDFJSDev === "undefined") {
-    window.isGECKOVIEW = true;
-  }
   PDFViewerApplication.run(config);
 }
 
@@ -80,7 +77,7 @@ if (
 }
 
 export {
-  PDFViewerApplication,
   AppConstants as PDFViewerApplicationConstants,
   AppOptions as PDFViewerApplicationOptions,
+  PDFViewerApplication,
 };

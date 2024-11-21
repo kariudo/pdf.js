@@ -243,6 +243,12 @@ describe("Scripting", function () {
 
         value = await myeval(`util.scand(2, "4/15/07 3:14:15 am").toString()`);
         expect(new Date(value)).toEqual(date);
+
+        value = await myeval(`util.scand("mmddyyyy", "07/15/2007").toString()`);
+        expect(new Date(value)).toEqual(new Date("07/15/2007"));
+
+        value = await myeval(`util.scand("mmddyyyy", "07a15b2007").toString()`);
+        expect(new Date(value)).toEqual(new Date("07/15/2007"));
       });
     });
 
@@ -628,6 +634,10 @@ describe("Scripting", function () {
         await check("12", "mm", "2000/12/01");
         await check("2022", "yyyy", "2022/01/01");
         await check("a1$9bbbb21", "dd/mm/yyyy", "2021/09/01");
+        await check("1/2/2024", "dd/mm/yyyy", "2024/02/01");
+        await check("01/2/2024", "dd/mm/yyyy", "2024/02/01");
+        await check("1/02/2024", "dd/mm/yyyy", "2024/02/01");
+        await check("01/02/2024", "dd/mm/yyyy", "2024/02/01");
 
         // The following test isn't working as expected because
         // the quickjs date parser has been replaced by the browser one
@@ -1567,6 +1577,67 @@ describe("Scripting", function () {
         send_queue.delete(refId);
       });
 
+      it("should validate a US phone number with digits only (long) on a keystroke event", async () => {
+        const refId = getId();
+        const data = {
+          objects: {
+            field: [
+              {
+                id: refId,
+                value: "",
+                actions: {
+                  Keystroke: [`AFSpecial_Keystroke(2);`],
+                },
+                type: "text",
+              },
+            ],
+          },
+          appInfo: { language: "en-US", platform: "Linux x86_64" },
+          calculationOrder: [],
+          dispatchEventName: "_dispatchMe",
+        };
+        sandbox.createSandbox(data);
+
+        let value = "";
+        const changes = "1234567890";
+        let i = 0;
+
+        for (; i < changes.length; i++) {
+          const change = changes.charAt(i);
+          await sandbox.dispatchEventInSandbox({
+            id: refId,
+            value,
+            change,
+            name: "Keystroke",
+            willCommit: false,
+            selStart: i,
+            selEnd: i,
+          });
+          expect(send_queue.has(refId)).toEqual(true);
+          send_queue.delete(refId);
+          value += change;
+        }
+
+        await sandbox.dispatchEventInSandbox({
+          id: refId,
+          value,
+          change: "A",
+          name: "Keystroke",
+          willCommit: false,
+          selStart: i,
+          selEnd: i,
+        });
+        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.get(refId)).toEqual({
+          id: refId,
+          siblings: null,
+          value,
+          selRange: [i, i],
+        });
+
+        send_queue.delete(refId);
+      });
+
       it("should validate a US phone number (short) on a keystroke event", async () => {
         const refId = getId();
         const data = {
@@ -1590,6 +1661,67 @@ describe("Scripting", function () {
 
         let value = "";
         const changes = "123-4567";
+        let i = 0;
+
+        for (; i < changes.length; i++) {
+          const change = changes.charAt(i);
+          await sandbox.dispatchEventInSandbox({
+            id: refId,
+            value,
+            change,
+            name: "Keystroke",
+            willCommit: false,
+            selStart: i,
+            selEnd: i,
+          });
+          expect(send_queue.has(refId)).toEqual(true);
+          send_queue.delete(refId);
+          value += change;
+        }
+
+        await sandbox.dispatchEventInSandbox({
+          id: refId,
+          value,
+          change: "A",
+          name: "Keystroke",
+          willCommit: false,
+          selStart: i,
+          selEnd: i,
+        });
+        expect(send_queue.has(refId)).toEqual(true);
+        expect(send_queue.get(refId)).toEqual({
+          id: refId,
+          siblings: null,
+          value,
+          selRange: [i, i],
+        });
+
+        send_queue.delete(refId);
+      });
+
+      it("should validate a US phone number with digits only (short) on a keystroke event", async () => {
+        const refId = getId();
+        const data = {
+          objects: {
+            field: [
+              {
+                id: refId,
+                value: "",
+                actions: {
+                  Keystroke: [`AFSpecial_Keystroke(2);`],
+                },
+                type: "text",
+              },
+            ],
+          },
+          appInfo: { language: "en-US", platform: "Linux x86_64" },
+          calculationOrder: [],
+          dispatchEventName: "_dispatchMe",
+        };
+        sandbox.createSandbox(data);
+
+        let value = "";
+        const changes = "1234567";
         let i = 0;
 
         for (; i < changes.length; i++) {

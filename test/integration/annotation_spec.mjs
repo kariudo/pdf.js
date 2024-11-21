@@ -503,6 +503,14 @@ describe("ResetForm action", () => {
       it("must check that the Ink annotation has a popup", async () => {
         await Promise.all(
           pages.map(async ([browserName, page]) => {
+            if (browserName) {
+              // TODO
+              pending(
+                "Re-enable this test when the Ink annotation has been made editable."
+              );
+              return;
+            }
+
             await page.waitForFunction(
               `document.querySelector("[data-annotation-id='25R']").hidden === false`
             );
@@ -611,6 +619,36 @@ describe("ResetForm action", () => {
               el => el.hidden
             );
             expect(hidden).withContext(`In ${browserName}`).toEqual(true);
+          })
+        );
+      });
+    });
+  });
+
+  describe("Annotation with empty popup and aria", () => {
+    describe("issue14438.pdf", () => {
+      let pages;
+
+      beforeAll(async () => {
+        pages = await loadAndWait(
+          "highlights.pdf",
+          "[data-annotation-id='693R']"
+        );
+      });
+
+      afterAll(async () => {
+        await closePages(pages);
+      });
+
+      it("must check that the highlight annotation has no popup and no aria-haspopup attribute", async () => {
+        await Promise.all(
+          pages.map(async ([browserName, page]) => {
+            await page.waitForFunction(
+              // No aria-haspopup attribute,
+              `document.querySelector("[data-annotation-id='693R']").ariaHasPopup === null` +
+                // and no popup.
+                `&& document.querySelector("[data-annotation-id='694R']") === null`
+            );
           })
         );
       });

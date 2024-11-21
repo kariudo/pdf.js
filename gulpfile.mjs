@@ -12,19 +12,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/* eslint-env node */
 
 import {
   babelPluginPDFJSPreprocessor,
   preprocessPDFJSCode,
 } from "./external/builder/babel-plugin-pdfjs-preprocessor.mjs";
-import { exec, spawn, spawnSync } from "child_process";
+import { exec, execSync, spawn, spawnSync } from "child_process";
 import autoprefixer from "autoprefixer";
 import babel from "@babel/core";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import gulp from "gulp";
+import hljs from "highlight.js";
+import layouts from "@metalsmith/layouts";
+import markdown from "@metalsmith/markdown";
+import Metalsmith from "metalsmith";
 import ordered from "ordered-read-streams";
 import path from "path";
 import postcss from "gulp-postcss";
@@ -33,10 +36,10 @@ import postcssDirPseudoClass from "postcss-dir-pseudo-class";
 import postcssDiscardComments from "postcss-discard-comments";
 import postcssNesting from "postcss-nesting";
 import { preprocess } from "./external/builder/builder.mjs";
+import relative from "metalsmith-html-relative";
 import rename from "gulp-rename";
 import replace from "gulp-replace";
 import stream from "stream";
-import streamqueue from "streamqueue";
 import TerserPlugin from "terser-webpack-plugin";
 import Vinyl from "vinyl";
 import webpack2 from "webpack";
@@ -48,7 +51,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BUILD_DIR = "build/";
 const L10N_DIR = "l10n/";
 const TEST_DIR = "test/";
-const EXTENSION_SRC_DIR = "extensions/";
 
 const BASELINE_DIR = BUILD_DIR + "baseline/";
 const MOZCENTRAL_BASELINE_DIR = BUILD_DIR + "mozcentral.baseline/";
@@ -73,17 +75,15 @@ const COMMON_WEB_FILES = [
 ];
 const MOZCENTRAL_DIFF_FILE = "mozcentral.diff";
 
-const DIST_REPO_URL = "https://github.com/mozilla/pdfjs-dist";
-
 const CONFIG_FILE = "pdfjs.config";
 const config = JSON.parse(fs.readFileSync(CONFIG_FILE).toString());
 
 const ENV_TARGETS = [
   "last 2 versions",
-  "Chrome >= 98",
+  "Chrome >= 103",
   "Firefox ESR",
   "Safari >= 16.4",
-  "Node >= 18",
+  "Node >= 20",
   "> 1%",
   "not IE > 0",
   "not dead",
@@ -97,7 +97,7 @@ const AUTOPREFIXER_CONFIG = {
 const BABEL_TARGETS = ENV_TARGETS.join(", ");
 
 const BABEL_PRESET_ENV_OPTS = Object.freeze({
-  corejs: "3.37.1",
+  corejs: "3.39.0",
   exclude: ["web.structured-clone"],
   shippedProposals: true,
   useBuiltIns: "usage",
@@ -190,6 +190,8 @@ function createWebpackAlias(defines) {
     "fluent-dom": "node_modules/@fluent/dom/esm/index.js",
   };
   const libraryAlias = {
+    "display-cmap_reader_factory": "src/display/stubs.js",
+    "display-standard_fontdata_factory": "src/display/stubs.js",
     "display-fetch_stream": "src/display/stubs.js",
     "display-network": "src/display/stubs.js",
     "display-node_stream": "src/display/stubs.js",
@@ -200,6 +202,7 @@ function createWebpackAlias(defines) {
     "web-annotation_editor_params": "web/annotation_editor_params.js",
     "web-download_manager": "",
     "web-external_services": "",
+    "web-new_alt_text_manager": "web/new_alt_text_manager.js",
     "web-null_l10n": "",
     "web-pdf_attachment_viewer": "web/pdf_attachment_viewer.js",
     "web-pdf_cursor_tools": "web/pdf_cursor_tools.js",
@@ -217,6 +220,10 @@ function createWebpackAlias(defines) {
   };
 
   if (defines.CHROME) {
+    libraryAlias["display-cmap_reader_factory"] =
+      "src/display/cmap_reader_factory.js";
+    libraryAlias["display-standard_fontdata_factory"] =
+      "src/display/standard_fontdata_factory.js";
     libraryAlias["display-fetch_stream"] = "src/display/fetch_stream.js";
     libraryAlias["display-network"] = "src/display/network.js";
 
@@ -229,6 +236,10 @@ function createWebpackAlias(defines) {
     // Aliases defined here must also be replicated in the paths section of
     // the tsconfig.json file for the type generation to work.
     // In the tsconfig.json files, the .js extension must be omitted.
+    libraryAlias["display-cmap_reader_factory"] =
+      "src/display/cmap_reader_factory.js";
+    libraryAlias["display-standard_fontdata_factory"] =
+      "src/display/standard_fontdata_factory.js";
     libraryAlias["display-fetch_stream"] = "src/display/fetch_stream.js";
     libraryAlias["display-network"] = "src/display/network.js";
     libraryAlias["display-node_stream"] = "src/display/node_stream.js";
@@ -280,9 +291,6 @@ function createWebpackConfig(
     BUNDLE_VERSION: versionInfo.version,
     BUNDLE_BUILD: versionInfo.commit,
     TESTING: defines.TESTING ?? process.env.TESTING === "true",
-    BROWSER_PREFERENCES: defaultPreferencesDir
-      ? getBrowserPreferences(defaultPreferencesDir)
-      : {},
     DEFAULT_PREFERENCES: defaultPreferencesDir
       ? getDefaultPreferences(defaultPreferencesDir)
       : {},
@@ -374,6 +382,7 @@ function createWebpackConfig(
     module: {
       rules: [
         {
+          test: /\.[mc]?js$/,
           loader: "babel-loader",
           exclude: babelExcludeRegExp,
           options: {
@@ -445,21 +454,10 @@ function checkChromePreferencesFile(chromePrefsPath, webPrefs) {
 }
 
 function tweakWebpackOutput(jsName) {
-  const replacer = [
-    " __webpack_exports__ = {};", // Normal builds.
-    ",__webpack_exports__={};", // Minified builds.
-  ];
-  const regex = new RegExp(`(${replacer.join("|")})`, "gm");
-
-  return replace(regex, match => {
-    switch (match) {
-      case " __webpack_exports__ = {};":
-        return ` __webpack_exports__ = globalThis.${jsName} = {};`;
-      case ",__webpack_exports__={};":
-        return `,__webpack_exports__=globalThis.${jsName}={};`;
-    }
-    return match;
-  });
+  return replace(
+    /((?:\s|,)__webpack_exports__)(?:\s?)=(?:\s?)({};)/gm,
+    (match, p1, p2) => `${p1} = globalThis.${jsName} = ${p2}`
+  );
 }
 
 function createMainBundle(defines) {
@@ -675,9 +673,8 @@ function getTempFile(prefix, suffix) {
   return filePath;
 }
 
-function createTestSource(testsName, { bot = false, xfaOnly = false } = {}) {
-  const source = stream.Readable({ objectMode: true });
-  source._read = function () {
+function runTests(testsName, { bot = false, xfaOnly = false } = {}) {
+  return new Promise((resolve, reject) => {
     console.log();
     console.log("### Running " + testsName + " tests");
 
@@ -700,6 +697,13 @@ function createTestSource(testsName, { bot = false, xfaOnly = false } = {}) {
           args.push("--xfaOnly");
         }
         args.push("--manifestFile=" + PDF_TEST);
+        collectArgs(
+          {
+            names: ["-t", "--testfilter"],
+            hasValue: true,
+          },
+          args
+        );
         break;
       case "unit":
         args.push("--unitTest");
@@ -711,14 +715,17 @@ function createTestSource(testsName, { bot = false, xfaOnly = false } = {}) {
         args.push("--integration");
         break;
       default:
-        this.emit("error", new Error("Unknown name: " + testsName));
-        return null;
+        reject(new Error(`Unknown tests name '${testsName}'`));
+        return;
     }
     if (bot) {
       args.push("--strictVerify");
     }
     if (process.argv.includes("--noChrome") || forceNoChrome) {
       args.push("--noChrome");
+    }
+    if (process.argv.includes("--noFirefox")) {
+      args.push("--noFirefox");
     }
     if (process.argv.includes("--headless")) {
       args.push("--headless");
@@ -727,13 +734,33 @@ function createTestSource(testsName, { bot = false, xfaOnly = false } = {}) {
     const testProcess = startNode(args, { cwd: TEST_DIR, stdio: "inherit" });
     testProcess.on("close", function (code) {
       if (code !== 0) {
-        throw new Error(`Running ${testsName} tests failed.`);
+        reject(new Error(`Running ${testsName} tests failed.`));
       }
-      source.push(null);
+      resolve();
     });
-    return undefined;
-  };
-  return source;
+  });
+}
+
+function collectArgs(options, args) {
+  if (!Array.isArray(options)) {
+    options = [options];
+  }
+  for (let i = 0, ii = process.argv.length; i < ii; i++) {
+    const arg = process.argv[i];
+    const option = options.find(opt => opt.names.includes(arg));
+    if (!option) {
+      continue;
+    }
+    if (!option.hasValue) {
+      args.push(arg);
+      continue;
+    }
+    const next = process.argv[i + 1];
+    if (next && !next.startsWith("-")) {
+      args.push(arg, next);
+      i += 1;
+    }
+  }
 }
 
 function makeRef(done, bot) {
@@ -754,9 +781,19 @@ function makeRef(done, bot) {
   if (process.argv.includes("--noChrome") || forceNoChrome) {
     args.push("--noChrome");
   }
+  if (process.argv.includes("--noFirefox")) {
+    args.push("--noFirefox");
+  }
   if (process.argv.includes("--headless")) {
     args.push("--headless");
   }
+  collectArgs(
+    {
+      names: ["-t", "--testfilter"],
+      hasValue: true,
+    },
+    args
+  );
 
   const testProcess = startNode(args, { cwd: TEST_DIR, stdio: "inherit" });
   testProcess.on("close", function (code) {
@@ -863,13 +900,6 @@ async function parseDefaultPreferences(dir) {
     "./" + DEFAULT_PREFERENCES_DIR + dir + "app_options.mjs"
   );
 
-  const browserPrefs = AppOptions.getAll(
-    OptionKind.BROWSER,
-    /* defaultOnly = */ true
-  );
-  if (Object.keys(browserPrefs).length === 0) {
-    throw new Error("No browser preferences found.");
-  }
   const prefs = AppOptions.getAll(
     OptionKind.PREFERENCE,
     /* defaultOnly = */ true
@@ -879,20 +909,9 @@ async function parseDefaultPreferences(dir) {
   }
 
   fs.writeFileSync(
-    DEFAULT_PREFERENCES_DIR + dir + "browser_preferences.json",
-    JSON.stringify(browserPrefs)
-  );
-  fs.writeFileSync(
     DEFAULT_PREFERENCES_DIR + dir + "default_preferences.json",
     JSON.stringify(prefs)
   );
-}
-
-function getBrowserPreferences(dir) {
-  const str = fs
-    .readFileSync(DEFAULT_PREFERENCES_DIR + dir + "browser_preferences.json")
-    .toString();
-  return JSON.parse(str);
 }
 
 function getDefaultPreferences(dir) {
@@ -1131,6 +1150,7 @@ function buildComponents(defines, dir) {
     "web/images/loading-icon.gif",
     "web/images/altText_*.svg",
     "web/images/editor-toolbar-*.svg",
+    "web/images/messageBar_*.svg",
     "web/images/toolbarButton-{editorHighlight,menuArrow}.svg",
     "web/images/cursor-*.svg",
   ];
@@ -1284,26 +1304,31 @@ gulp.task(
   )
 );
 
-function preprocessDefaultPreferences(content) {
+function createDefaultPrefsFile() {
+  const defaultFileName = "PdfJsDefaultPrefs.js",
+    overrideFileName = "PdfJsOverridePrefs.js";
   const licenseHeader = fs.readFileSync("./src/license_header.js").toString();
 
   const MODIFICATION_WARNING =
-    "//\n// THIS FILE IS GENERATED AUTOMATICALLY, DO NOT EDIT MANUALLY!\n//\n";
+    "// THIS FILE IS GENERATED AUTOMATICALLY, DO NOT EDIT MANUALLY!\n//\n" +
+    `// Any overrides should be placed in \`${overrideFileName}\`.\n`;
 
-  const bundleDefines = {
-    ...DEFINES,
-    DEFAULT_PREFERENCES: getDefaultPreferences("mozcentral/"),
-  };
+  const prefs = getDefaultPreferences("mozcentral/");
+  const buf = [];
 
-  content = preprocessPDFJSCode(
-    {
-      rootPath: __dirname,
-      defines: bundleDefines,
-    },
-    content
-  );
+  for (const name in prefs) {
+    let value = prefs[name];
 
-  return licenseHeader + "\n" + MODIFICATION_WARNING + "\n" + content + "\n";
+    if (typeof value === "string") {
+      value = `"${value}"`;
+    }
+    buf.push(`pref("pdfjs.${name}", ${value});`);
+  }
+  buf.sort();
+  buf.unshift(licenseHeader, MODIFICATION_WARNING);
+  buf.push(`\n#include ${overrideFileName}\n`);
+
+  return createStringSource(defaultFileName, buf.join("\n"));
 }
 
 function replaceMozcentralCSS() {
@@ -1331,8 +1356,7 @@ gulp.task(
         MOZCENTRAL_EXTENSION_DIR = MOZCENTRAL_DIR + "browser/extensions/pdfjs/",
         MOZCENTRAL_CONTENT_DIR = MOZCENTRAL_EXTENSION_DIR + "content/",
         MOZCENTRAL_L10N_DIR =
-          MOZCENTRAL_DIR + "browser/locales/en-US/pdfviewer/",
-        FIREFOX_CONTENT_DIR = EXTENSION_SRC_DIR + "/firefox/content/";
+          MOZCENTRAL_DIR + "browser/locales/en-US/pdfviewer/";
 
       const MOZCENTRAL_WEB_FILES = [
         ...COMMON_WEB_FILES,
@@ -1407,12 +1431,7 @@ gulp.task(
         gulp
           .src("LICENSE", { encoding: false })
           .pipe(gulp.dest(MOZCENTRAL_EXTENSION_DIR)),
-        gulp
-          .src(FIREFOX_CONTENT_DIR + "PdfJsDefaultPreferences.sys.mjs", {
-            encoding: false,
-          })
-          .pipe(transform("utf8", preprocessDefaultPreferences))
-          .pipe(gulp.dest(MOZCENTRAL_CONTENT_DIR)),
+        createDefaultPrefsFile().pipe(gulp.dest(MOZCENTRAL_EXTENSION_DIR)),
       ]);
     }
   )
@@ -1521,18 +1540,10 @@ gulp.task("jsdoc", function (done) {
   console.log();
   console.log("### Generating documentation (JSDoc)");
 
-  const JSDOC_FILES = ["src/display/api.js"];
-
   fs.rmSync(JSDOC_BUILD_DIR, { recursive: true, force: true });
   fs.mkdirSync(JSDOC_BUILD_DIR, { recursive: true });
 
-  const command =
-    '"node_modules/.bin/jsdoc" -d ' +
-    JSDOC_BUILD_DIR +
-    " " +
-    JSDOC_FILES.join(" ");
-
-  exec(command, done);
+  exec('"node_modules/.bin/jsdoc" -c jsdoc.json', done);
 });
 
 gulp.task("types", function (done) {
@@ -1572,6 +1583,8 @@ function buildLibHelper(bundleDefines, inputStream, outputDir) {
     defines: bundleDefines,
     map: {
       "pdfjs-lib": "../pdf.js",
+      "display-cmap_reader_factory": "./cmap_reader_factory.js",
+      "display-standard_fontdata_factory": "./standard_fontdata_factory.js",
       "display-fetch_stream": "./fetch_stream.js",
       "display-network": "./network.js",
       "display-node_stream": "./node_stream.js",
@@ -1597,9 +1610,6 @@ function buildLib(defines, dir) {
     BUNDLE_VERSION: versionInfo.version,
     BUNDLE_BUILD: versionInfo.commit,
     TESTING: defines.TESTING ?? process.env.TESTING === "true",
-    BROWSER_PREFERENCES: getBrowserPreferences(
-      defines.SKIP_BABEL ? "lib/" : "lib-legacy/"
-    ),
     DEFAULT_PREFERENCES: getDefaultPreferences(
       defines.SKIP_BABEL ? "lib/" : "lib-legacy/"
     ),
@@ -1685,13 +1695,13 @@ gulp.task(
   )
 );
 
-function compressPublish(targetName, dir) {
+function compressPublish({ sourceDirectory, targetFile, modifiedTime }) {
   return gulp
-    .src(dir + "**", { encoding: false })
-    .pipe(zip(targetName))
+    .src(`${sourceDirectory}**`, { encoding: false })
+    .pipe(zip(targetFile, { modifiedTime }))
     .pipe(gulp.dest(BUILD_DIR))
     .on("end", function () {
-      console.log("Built distribution file: " + targetName);
+      console.log(`Built distribution file: ${targetFile}`);
     });
 }
 
@@ -1704,15 +1714,34 @@ gulp.task(
 
     config.stableVersion = version;
 
+    // ZIP files record the modification date of the source files, so if files
+    // are generated during the build process the output is not reproducible.
+    // To avoid this, the modification dates should be replaced with a fixed
+    // date, in our case the last Git commit date, so that builds from identical
+    // source code result in bit-by-bit identical output. The `gulp-zip` library
+    // supports providing a different modification date to enable reproducible
+    // builds. Note that the Git command below outputs the last Git commit date
+    // as a Unix timestamp (in seconds since epoch), but the `Date` constructor
+    // in JavaScript requires millisecond input, so we have to multiply by 1000.
+    const lastCommitTimestamp = execSync('git log --format="%at" -n 1')
+      .toString()
+      .replace("\n", "");
+    const lastCommitDate = new Date(parseInt(lastCommitTimestamp, 10) * 1000);
+
     return ordered([
       createStringSource(CONFIG_FILE, JSON.stringify(config, null, 2)).pipe(
         gulp.dest(".")
       ),
-      compressPublish("pdfjs-" + version + "-dist.zip", GENERIC_DIR),
-      compressPublish(
-        "pdfjs-" + version + "-legacy-dist.zip",
-        GENERIC_LEGACY_DIR
-      ),
+      compressPublish({
+        sourceDirectory: GENERIC_DIR,
+        targetFile: `pdfjs-${version}-dist.zip`,
+        modifiedTime: lastCommitDate,
+      }),
+      compressPublish({
+        sourceDirectory: GENERIC_LEGACY_DIR,
+        targetFile: `pdfjs-${version}-legacy-dist.zip`,
+        modifiedTime: lastCommitDate,
+      }),
     ]);
   })
 );
@@ -1728,57 +1757,55 @@ function setTestEnv(done) {
 
 gulp.task(
   "test",
-  gulp.series(setTestEnv, "generic", "components", function runTest() {
-    return streamqueue(
-      { objectMode: true },
-      createTestSource("unit"),
-      createTestSource("browser"),
-      createTestSource("integration")
-    );
+  gulp.series(setTestEnv, "generic", "components", async function runTest() {
+    await runTests("unit");
+    await runTests("browser");
+    await runTests("integration");
   })
 );
 
 gulp.task(
   "bottest",
-  gulp.series(setTestEnv, "generic", "components", function runBotTest() {
-    return streamqueue(
-      { objectMode: true },
-      createTestSource("unit", { bot: true }),
-      createTestSource("browser", { bot: true }),
-      createTestSource("integration")
-    );
+  gulp.series(setTestEnv, "generic", "components", async function runBotTest() {
+    await runTests("unit", { bot: true });
+    await runTests("browser", { bot: true });
+    await runTests("integration");
   })
 );
 
 gulp.task(
   "xfatest",
-  gulp.series(setTestEnv, "generic", "components", function runXfaTest() {
-    return streamqueue(
-      { objectMode: true },
-      createTestSource("unit"),
-      createTestSource("browser", { xfaOnly: true }),
-      createTestSource("integration")
-    );
+  gulp.series(setTestEnv, "generic", "components", async function runXfaTest() {
+    await runTests("unit");
+    await runTests("browser", { xfaOnly: true });
+    await runTests("integration");
   })
 );
 
 gulp.task(
   "botxfatest",
-  gulp.series(setTestEnv, "generic", "components", function runBotXfaTest() {
-    return streamqueue(
-      { objectMode: true },
-      createTestSource("unit", { bot: true }),
-      createTestSource("browser", { bot: true, xfaOnly: true }),
-      createTestSource("integration")
-    );
-  })
+  gulp.series(
+    setTestEnv,
+    "generic",
+    "components",
+    async function runBotXfaTest() {
+      await runTests("unit", { bot: true });
+      await runTests("browser", { bot: true, xfaOnly: true });
+      await runTests("integration");
+    }
+  )
 );
 
 gulp.task(
   "browsertest",
-  gulp.series(setTestEnv, "generic", "components", function runBrowserTest() {
-    return createTestSource("browser");
-  })
+  gulp.series(
+    setTestEnv,
+    "generic",
+    "components",
+    async function runBrowserTest() {
+      await runTests("browser");
+    }
+  )
 );
 
 gulp.task(
@@ -1787,33 +1814,30 @@ gulp.task(
     setTestEnv,
     "generic",
     "components",
-    function runBotBrowserTest() {
-      return streamqueue(
-        { objectMode: true },
-        createTestSource("browser", { bot: true })
-      );
+    async function runBotBrowserTest() {
+      await runTests("browser", { bot: true });
     }
   )
 );
 
 gulp.task(
   "unittest",
-  gulp.series(setTestEnv, "generic", function runUnitTest() {
-    return createTestSource("unit");
+  gulp.series(setTestEnv, "generic", async function runUnitTest() {
+    await runTests("unit");
   })
 );
 
 gulp.task(
   "integrationtest",
-  gulp.series(setTestEnv, "generic", function runIntegrationTest() {
-    return createTestSource("integration");
+  gulp.series(setTestEnv, "generic", async function runIntegrationTest() {
+    await runTests("integration");
   })
 );
 
 gulp.task(
   "fonttest",
-  gulp.series(setTestEnv, function runFontTest() {
-    return createTestSource("font");
+  gulp.series(setTestEnv, async function runFontTest() {
+    await runTests("font");
   })
 );
 
@@ -1927,13 +1951,11 @@ gulp.task(
 
 gulp.task("lint", function (done) {
   console.log();
-  console.log("### Linting JS/CSS/JSON files");
+  console.log("### Linting JS/CSS/JSON/SVG files");
 
   // Ensure that we lint the Firefox specific *.jsm files too.
   const esLintOptions = [
     "node_modules/eslint/bin/eslint",
-    "--ext",
-    ".js,.jsm,.mjs,.json",
     ".",
     "--report-unused-disable-directives",
   ];
@@ -1960,6 +1982,13 @@ gulp.task("lint", function (done) {
     prettierOptions.push("--log-level", "warn", "--check");
   }
 
+  const svgLintOptions = [
+    "node_modules/svglint/bin/cli.js",
+    "**/*.svg",
+    "--ci",
+    "--no-summary",
+  ];
+
   const esLintProcess = startNode(esLintOptions, { stdio: "inherit" });
   esLintProcess.on("close", function (esLintCode) {
     if (esLintCode !== 0) {
@@ -1980,8 +2009,19 @@ gulp.task("lint", function (done) {
           done(new Error("Prettier failed."));
           return;
         }
-        console.log("files checked, no errors found");
-        done();
+
+        const svgLintProcess = startNode(svgLintOptions, {
+          stdio: "inherit",
+        });
+        svgLintProcess.on("close", function (svgLintCode) {
+          if (svgLintCode !== 0) {
+            done(new Error("svglint failed."));
+            return;
+          }
+
+          console.log("files checked, no errors found");
+          done();
+        });
       });
     });
   });
@@ -2071,8 +2111,19 @@ gulp.task(
       console.log();
       console.log("### Starting local server");
 
+      let port = 8888;
+      const i = process.argv.indexOf("--port");
+      if (i >= 0 && i + 1 < process.argv.length) {
+        const p = parseInt(process.argv[i + 1], 10);
+        if (!isNaN(p)) {
+          port = p;
+        } else {
+          console.error("Invalid port number: using default (8888)");
+        }
+      }
+
       const { WebServer } = await import("./test/webserver.mjs");
-      const server = new WebServer({ port: 8888 });
+      const server = new WebServer({ port });
       server.start();
     }
   )
@@ -2125,26 +2176,44 @@ function ghPagesPrepare() {
   ]);
 }
 
-gulp.task("wintersmith", async function () {
-  const { default: wintersmith } = await import("wintersmith");
-  const env = wintersmith("docs/config.json");
-
+gulp.task("metalsmith", async function () {
   return new Promise((resolve, reject) => {
-    env.build(GH_PAGES_DIR, function (error) {
-      if (error) {
-        reject(error);
-        return;
-      }
-
-      replaceInFile(
-        GH_PAGES_DIR + "/getting_started/index.html",
-        /STABLE_VERSION/g,
-        config.stableVersion
-      );
-
-      console.log("Done building with wintersmith.");
-      resolve();
-    });
+    Metalsmith(__dirname)
+      .source("docs/contents")
+      .destination(GH_PAGES_DIR)
+      .clean(false)
+      .metadata({
+        sitename: "PDF.js",
+        siteurl: "https://mozilla.github.io/pdf.js",
+        description:
+          "A general-purpose, web standards-based platform for parsing and rendering PDFs.",
+      })
+      .use(
+        markdown({
+          engineOptions: {
+            highlight: (code, language) =>
+              hljs.highlight(code, { language }).value,
+          },
+        })
+      )
+      .use(
+        layouts({
+          directory: "docs/templates",
+        })
+      )
+      .use(relative())
+      .build(error => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        replaceInFile(
+          `${GH_PAGES_DIR}/getting_started/index.html`,
+          /STABLE_VERSION/g,
+          config.stableVersion
+        );
+        resolve();
+      });
   });
 });
 
@@ -2155,7 +2224,7 @@ gulp.task(
     "generic-legacy",
     "jsdoc",
     ghPagesPrepare,
-    "wintersmith"
+    "metalsmith"
   )
 );
 
@@ -2165,8 +2234,9 @@ function packageJson() {
   const DIST_NAME = "@kariudo/pdfjs";
   const DIST_DESCRIPTION = "Generic build of Mozilla's PDF.js library.";
   const DIST_KEYWORDS = ["Mozilla", "pdf", "pdf.js"];
-  const DIST_HOMEPAGE = "http://mozilla.github.io/pdf.js/";
+  const DIST_HOMEPAGE = "https://mozilla.github.io/pdf.js/";
   const DIST_BUGS_URL = "https://github.com/mozilla/pdf.js/issues";
+  const DIST_GIT_URL = "https://github.com/mozilla/pdf.js.git";
   const DIST_LICENSE = "Apache-2.0";
 
   const npmManifest = {
@@ -2180,8 +2250,7 @@ function packageJson() {
     bugs: DIST_BUGS_URL,
     license: DIST_LICENSE,
     optionalDependencies: {
-      canvas: "^2.11.2",
-      path2d: "^0.2.0",
+      "@napi-rs/canvas": "^0.1.62",
     },
     browser: {
       canvas: false,
@@ -2192,11 +2261,12 @@ function packageJson() {
     },
     repository: {
       type: "git",
-      url: DIST_REPO_URL,
+      url: `git+${DIST_GIT_URL}`,
     },
     engines: {
-      node: ">=18",
+      node: ">=20",
     },
+    scripts: {},
   };
 
   return createStringSource(
@@ -2206,7 +2276,7 @@ function packageJson() {
 }
 
 gulp.task(
-  "dist-pre",
+  "dist",
   gulp.series(
     "generic",
     "generic-legacy",
@@ -2218,23 +2288,8 @@ gulp.task(
     "minified-legacy",
     "types",
     function createDist() {
-      console.log();
-      console.log("### Cloning baseline distribution");
-
       fs.rmSync(DIST_DIR, { recursive: true, force: true });
       fs.mkdirSync(DIST_DIR, { recursive: true });
-      safeSpawnSync("git", ["clone", "--depth", "1", DIST_REPO_URL, DIST_DIR]);
-
-      console.log();
-      console.log("### Overwriting all files");
-
-      // Remove all files/folders, except for `.git` because it needs to be a
-      // valid Git repository for the Git commands in the `dist` target to work.
-      for (const entry of fs.readdirSync(DIST_DIR)) {
-        if (entry !== ".git") {
-          fs.rmSync(DIST_DIR + entry, { recursive: true, force: true });
-        }
-      }
 
       return ordered([
         packageJson().pipe(gulp.dest(DIST_DIR)),
@@ -2334,7 +2389,7 @@ gulp.task(
 
 gulp.task(
   "dist-install",
-  gulp.series("dist-pre", function createDistInstall(done) {
+  gulp.series("dist", function createDistInstall(done) {
     let distPath = DIST_DIR;
     const opts = {};
     const installPath = process.env.PDFJS_INSTALL_PATH;
@@ -2343,53 +2398,6 @@ gulp.task(
       distPath = path.relative(installPath, distPath);
     }
     safeSpawnSync("npm", ["install", distPath], opts);
-    done();
-  })
-);
-
-gulp.task(
-  "dist",
-  gulp.series("dist-pre", function createDist(done) {
-    const VERSION = getVersionJSON().version;
-
-    console.log();
-    console.log("### Committing changes");
-
-    let reason = process.env.PDFJS_UPDATE_REASON;
-    // Attempt to work-around the broken link, see https://github.com/mozilla/pdf.js/issues/10391
-    if (typeof reason === "string") {
-      const reasonParts =
-        /^(See )(mozilla\/pdf\.js)@tags\/(v\d+\.\d+\.\d+)\s*$/.exec(reason);
-
-      if (reasonParts) {
-        reason =
-          reasonParts[1] +
-          "https://github.com/" +
-          reasonParts[2] +
-          "/releases/tag/" +
-          reasonParts[3];
-      }
-    }
-    const message =
-      "PDF.js version " + VERSION + (reason ? " - " + reason : "");
-
-    // Automatic tagging disabled.
-    // safeSpawnSync("git", ["add", "*"], { cwd: DIST_DIR });
-    // safeSpawnSync("git", ["commit", "-am", message], { cwd: DIST_DIR });
-    // safeSpawnSync("git", ["tag", "-a", "v" + VERSION, "-m", message], {
-    //   cwd: DIST_DIR,
-    // });
-
-    // console.log();
-    // console.log("Done. Push with");
-    // console.log(
-    //   "  cd " + DIST_DIR + "; git push --tags " + DIST_REPO_URL + " master"
-    // );
-    
-    console.log();
-    console.log(message);
-    console.log("Done.");
-    console.log();
     done();
   })
 );

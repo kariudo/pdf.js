@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 
-import { FeatureTest, ImageKind, shadow } from "../shared/util.js";
+import { FeatureTest, ImageKind, shadow, warn } from "../shared/util.js";
 
 const MIN_IMAGE_DIM = 2048;
 
@@ -32,13 +32,27 @@ const MAX_ERROR = 128;
 // should be a way faster to create the bitmap.
 
 class ImageResizer {
+  static #goodSquareLength = MIN_IMAGE_DIM;
+
+  static #isImageDecoderSupported = FeatureTest.isImageDecoderSupported;
+
   constructor(imgData, isMask) {
     this._imgData = imgData;
     this._isMask = isMask;
   }
 
+  static get canUseImageDecoder() {
+    return shadow(
+      this,
+      "canUseImageDecoder",
+      this.#isImageDecoderSupported
+        ? ImageDecoder.isTypeSupported("image/bmp")
+        : Promise.resolve(false)
+    );
+  }
+
   static needsToBeResized(width, height) {
-    if (width <= this._goodSquareLength && height <= this._goodSquareLength) {
+    if (width <= this.#goodSquareLength && height <= this.#goodSquareLength) {
       return false;
     }
 
@@ -52,14 +66,14 @@ class ImageResizer {
       return area > this.MAX_AREA;
     }
 
-    if (area < this._goodSquareLength ** 2) {
+    if (area < this.#goodSquareLength ** 2) {
       return false;
     }
 
     // We try as much as possible to avoid to compute the max area.
     if (this._areGoodDims(width, height)) {
-      this._goodSquareLength = Math.max(
-        this._goodSquareLength,
+      this.#goodSquareLength = Math.max(
+        this.#goodSquareLength,
         Math.floor(Math.sqrt(width * height))
       );
       return false;
@@ -69,13 +83,13 @@ class ImageResizer {
     // some large canvas, so in the Firefox case this value (and MAX_DIM) can be
     // infered from prefs (MAX_AREA = gfx.max-alloc-size / 4, 4 is because of
     // RGBA).
-    this._goodSquareLength = this._guessMax(
-      this._goodSquareLength,
+    this.#goodSquareLength = this._guessMax(
+      this.#goodSquareLength,
       MAX_DIM,
       MAX_ERROR,
       0
     );
-    const maxArea = (this.MAX_AREA = this._goodSquareLength ** 2);
+    const maxArea = (this.MAX_AREA = this.#goodSquareLength ** 2);
 
     return area > maxArea;
   }
@@ -93,12 +107,7 @@ class ImageResizer {
     return shadow(
       this,
       "MAX_AREA",
-      this._guessMax(
-        ImageResizer._goodSquareLength,
-        this.MAX_DIM,
-        MAX_ERROR,
-        0
-      ) ** 2
+      this._guessMax(this.#goodSquareLength, this.MAX_DIM, MAX_ERROR, 0) ** 2
     );
   }
 
@@ -109,11 +118,15 @@ class ImageResizer {
     }
   }
 
-  static setMaxArea(area) {
+  static setOptions({
+    canvasMaxAreaInBytes = -1,
+    isImageDecoderSupported = false,
+  }) {
     if (!this._hasMaxArea) {
       // Divide by 4 to have the value in pixels.
-      this.MAX_AREA = area >> 2;
+      this.MAX_AREA = canvasMaxAreaInBytes >> 2;
     }
+    this.#isImageDecoderSupported = isImageDecoderSupported;
   }
 
   static _areGoodDims(width, height) {
@@ -160,10 +173,37 @@ class ImageResizer {
 
   async _createImage() {
     const data = this._encodeBMP();
-    const blob = new Blob([data.buffer], {
-      type: "image/bmp",
-    });
-    const bitmapPromise = createImageBitmap(blob);
+    let decoder, imagePromise;
+
+    if (await ImageResizer.canUseImageDecoder) {
+      decoder = new ImageDecoder({
+        data,
+        type: "image/bmp",
+        preferAnimation: false,
+        transfer: [data.buffer],
+      });
+      imagePromise = decoder
+        .decode()
+        .catch(reason => {
+          warn(`BMP image decoding failed: ${reason}`);
+          // It's a bit unfortunate to create the BMP twice but we shouldn't be
+          // here in the first place.
+          return createImageBitmap(
+            new Blob([this._encodeBMP().buffer], {
+              type: "image/bmp",
+            })
+          );
+        })
+        .finally(() => {
+          decoder.close();
+        });
+    } else {
+      imagePromise = createImageBitmap(
+        new Blob([data.buffer], {
+          type: "image/bmp",
+        })
+      );
+    }
 
     const { MAX_AREA, MAX_DIM } = ImageResizer;
     const { _imgData: imgData } = this;
@@ -188,7 +228,8 @@ class ImageResizer {
 
     let newWidth = width;
     let newHeight = height;
-    let bitmap = await bitmapPromise;
+    const result = await imagePromise;
+    let bitmap = result.image || result;
 
     for (const step of steps) {
       const prevWidth = newWidth;
@@ -213,6 +254,9 @@ class ImageResizer {
         newWidth,
         newHeight
       );
+
+      // Release the resources associated with the bitmap.
+      bitmap.close();
       bitmap = canvas.transferToImageBitmap();
     }
 
@@ -392,7 +436,5 @@ class ImageResizer {
     return bmpData;
   }
 }
-
-ImageResizer._goodSquareLength = MIN_IMAGE_DIM;
 
 export { ImageResizer };

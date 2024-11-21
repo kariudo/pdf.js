@@ -77,32 +77,6 @@ const CursorTool = {
 const AutoPrintRegExp = /\bprint\s*\(/;
 
 /**
- * Scale factors for the canvas, necessary with HiDPI displays.
- */
-class OutputScale {
-  constructor() {
-    const pixelRatio = window.devicePixelRatio || 1;
-
-    /**
-     * @type {number} Horizontal scale.
-     */
-    this.sx = pixelRatio;
-
-    /**
-     * @type {number} Vertical scale.
-     */
-    this.sy = pixelRatio;
-  }
-
-  /**
-   * @type {boolean} Returns `true` when scaling is required, `false` otherwise.
-   */
-  get scaled() {
-    return this.sx !== 1 || this.sy !== 1;
-  }
-}
-
-/**
  * Scrolls specified element into view of its parent.
  * @param {HTMLElement} element - The element to be visible.
  * @param {Object} [spot] - An object with optional top and left properties,
@@ -193,6 +167,11 @@ function watchScroll(viewAreaElement, callback, abortSignal = undefined) {
     useCapture: true,
     signal: abortSignal,
   });
+  abortSignal?.addEventListener(
+    "abort",
+    () => window.cancelAnimationFrame(rAF),
+    { once: true }
+  );
   return state;
 }
 
@@ -263,6 +242,7 @@ function binarySearchFirstItem(items, condition, start = 0) {
  *  @param {number} x - Positive float number.
  *  @returns {Array} Estimated fraction: the first array item is a numerator,
  *                   the second one is a denominator.
+ *                   They are both natural numbers.
  */
 function approximateFraction(x) {
   // Fast paths for int numbers or their inversions.
@@ -309,9 +289,12 @@ function approximateFraction(x) {
   return result;
 }
 
-function roundToDivide(x, div) {
-  const r = x % div;
-  return r === 0 ? x : Math.round(x - r + div);
+/**
+ * @param {number} x - A positive number to round to a multiple of `div`.
+ * @param {number} div - A natural number.
+ */
+function floorToDivide(x, div) {
+  return x - (x % div);
 }
 
 /**
@@ -731,7 +714,7 @@ class ProgressBar {
   }
 
   setDisableAutoFetch(delay = /* ms = */ 5000) {
-    if (isNaN(this.#percent)) {
+    if (this.#percent === 100 || isNaN(this.#percent)) {
       return;
     }
     if (this.#disableAutoFetchTimeout) {
@@ -853,6 +836,25 @@ function toggleExpandedBtn(button, toggle, view = null) {
   view?.classList.toggle("hidden", !toggle);
 }
 
+// In Firefox, the css calc function uses f32 precision but the Chrome or Safari
+// are using f64 one. So in order to have the same rendering in all browsers, we
+// need to use the right precision in order to have correct dimensions.
+const calcRound =
+  typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")
+    ? Math.fround
+    : (function () {
+        if (
+          typeof PDFJSDev !== "undefined" &&
+          PDFJSDev.test("LIB") &&
+          typeof document === "undefined"
+        ) {
+          return x => x;
+        }
+        const e = document.createElement("div");
+        e.style.width = "round(down, calc(1.6666666666666665 * 792px), 1px)";
+        return e.style.width === "calc(1320px)" ? Math.fround : x => x;
+      })();
+
 export {
   animationStarted,
   apiPageLayoutToViewerModes,
@@ -861,11 +863,13 @@ export {
   AutoPrintRegExp,
   backtrackBeforeAllVisibleElements, // only exported for testing
   binarySearchFirstItem,
+  calcRound,
   CursorTool,
   DEFAULT_SCALE,
   DEFAULT_SCALE_DELTA,
   DEFAULT_SCALE_VALUE,
   docStyle,
+  floorToDivide,
   getActiveOrFocusedElement,
   getPageSizeInches,
   getVisibleElements,
@@ -878,13 +882,11 @@ export {
   MIN_SCALE,
   normalizeWheelEventDelta,
   normalizeWheelEventDirection,
-  OutputScale,
   parseQueryString,
   PresentationModeState,
   ProgressBar,
   removeNullCharacters,
   RenderingStates,
-  roundToDivide,
   SCROLLBAR_PADDING,
   scrollIntoView,
   ScrollMode,

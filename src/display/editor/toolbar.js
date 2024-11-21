@@ -24,16 +24,30 @@ class EditorToolbar {
 
   #buttons = null;
 
+  #altText = null;
+
+  static #l10nRemove = null;
+
   constructor(editor) {
     this.#editor = editor;
+
+    EditorToolbar.#l10nRemove ||= Object.freeze({
+      freetext: "pdfjs-editor-remove-freetext-button",
+      highlight: "pdfjs-editor-remove-highlight-button",
+      ink: "pdfjs-editor-remove-ink-button",
+      stamp: "pdfjs-editor-remove-stamp-button",
+    });
   }
 
   render() {
     const editToolbar = (this.#toolbar = document.createElement("div"));
-    editToolbar.className = "editToolbar";
+    editToolbar.classList.add("editToolbar", "hidden");
     editToolbar.setAttribute("role", "toolbar");
-    editToolbar.addEventListener("contextmenu", noContextMenu);
-    editToolbar.addEventListener("pointerdown", EditorToolbar.#pointerDown);
+    const signal = this.#editor._uiManager._signal;
+    editToolbar.addEventListener("contextmenu", noContextMenu, { signal });
+    editToolbar.addEventListener("pointerdown", EditorToolbar.#pointerDown, {
+      signal,
+    });
 
     const buttons = (this.#buttons = document.createElement("div"));
     buttons.className = "buttons";
@@ -57,6 +71,10 @@ class EditorToolbar {
     return editToolbar;
   }
 
+  get div() {
+    return this.#toolbar;
+  }
+
   static #pointerDown(e) {
     e.stopPropagation();
   }
@@ -77,13 +95,16 @@ class EditorToolbar {
     // If we're clicking on a button with the keyboard or with
     // the mouse, we don't want to trigger any focus events on
     // the editor.
+    const signal = this.#editor._uiManager._signal;
     element.addEventListener("focusin", this.#focusIn.bind(this), {
       capture: true,
+      signal,
     });
     element.addEventListener("focusout", this.#focusOut.bind(this), {
       capture: true,
+      signal,
     });
-    element.addEventListener("contextmenu", noContextMenu);
+    element.addEventListener("contextmenu", noContextMenu, { signal });
   }
 
   hide() {
@@ -93,20 +114,24 @@ class EditorToolbar {
 
   show() {
     this.#toolbar.classList.remove("hidden");
+    this.#altText?.shown();
   }
 
   #addDeleteButton() {
+    const { editorType, _uiManager } = this.#editor;
+
     const button = document.createElement("button");
     button.className = "delete";
     button.tabIndex = 0;
-    button.setAttribute(
-      "data-l10n-id",
-      `pdfjs-editor-remove-${this.#editor.editorType}-button`
-    );
+    button.setAttribute("data-l10n-id", EditorToolbar.#l10nRemove[editorType]);
     this.#addListenersToElement(button);
-    button.addEventListener("click", e => {
-      this.#editor._uiManager.delete();
-    });
+    button.addEventListener(
+      "click",
+      e => {
+        _uiManager.delete();
+      },
+      { signal: _uiManager._signal }
+    );
     this.#buttons.append(button);
   }
 
@@ -116,9 +141,11 @@ class EditorToolbar {
     return divider;
   }
 
-  addAltTextButton(button) {
+  async addAltText(altText) {
+    const button = await altText.render();
     this.#addListenersToElement(button);
     this.#buttons.prepend(button, this.#divider);
+    this.#altText = altText;
   }
 
   addColorPicker(colorPicker) {
@@ -150,7 +177,9 @@ class HighlightToolbar {
     const editToolbar = (this.#toolbar = document.createElement("div"));
     editToolbar.className = "editToolbar";
     editToolbar.setAttribute("role", "toolbar");
-    editToolbar.addEventListener("contextmenu", noContextMenu);
+    editToolbar.addEventListener("contextmenu", noContextMenu, {
+      signal: this.#uiManager._signal,
+    });
 
     const buttons = (this.#buttons = document.createElement("div"));
     buttons.className = "buttons";
@@ -207,10 +236,15 @@ class HighlightToolbar {
     button.append(span);
     span.className = "visuallyHidden";
     span.setAttribute("data-l10n-id", "pdfjs-highlight-floating-button-label");
-    button.addEventListener("contextmenu", noContextMenu);
-    button.addEventListener("click", () => {
-      this.#uiManager.highlightSelection("floating_button");
-    });
+    const signal = this.#uiManager._signal;
+    button.addEventListener("contextmenu", noContextMenu, { signal });
+    button.addEventListener(
+      "click",
+      () => {
+        this.#uiManager.highlightSelection("floating_button");
+      },
+      { signal }
+    );
     this.#buttons.append(button);
   }
 }

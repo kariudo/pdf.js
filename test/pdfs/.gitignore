@@ -2,6 +2,7 @@
 *.error
 
 !boundingBox_invalid.pdf
+!pdkids.pdf
 !tracemonkey.pdf
 !TrueType_without_cmap.pdf
 !franz.pdf
@@ -13,6 +14,8 @@
 !issue1155r.pdf
 !issue2017r.pdf
 !bug1727053.pdf
+!issue18408_reduced.pdf
+!bug1907000_reduced.pdf
 !issue11913.pdf
 !issue2391-1.pdf
 !issue2391-2.pdf
@@ -56,6 +59,7 @@
 !issue17679_2.pdf
 !issue18030.pdf
 !issue18042.pdf
+!issue18059.pdf
 !issue14953.pdf
 !issue15367.pdf
 !issue15372.pdf
@@ -125,6 +129,7 @@
 !issue7891_bc0.pdf
 !issue11242_reduced.pdf
 !issue16176.pdf
+!issue16287.pdf
 !issue17064_readonly.pdf
 !issue11279.pdf
 !issue11362.pdf
@@ -151,6 +156,7 @@
 !bug1020858.pdf
 !prefilled_f1040.pdf
 !bug1050040.pdf
+!issue18986.pdf
 !bug1200096.pdf
 !bug1068432.pdf
 !issue12295.pdf
@@ -560,6 +566,7 @@
 !poppler-90-0-fuzzed.pdf
 !issue14415.pdf
 !issue14307.pdf
+!issue18645.pdf
 !issue14497.pdf
 !bug1799927.pdf
 !issue14502.pdf
@@ -584,6 +591,7 @@
 !issue15690.pdf
 !bug1802888.pdf
 !issue15759.pdf
+!issue18823.pdf
 !issue15753.pdf
 !issue15789.pdf
 !fields_order.pdf
@@ -649,3 +657,28 @@
 !tracemonkey_freetext.pdf
 !issue17998.pdf
 !pdfjs_wikipedia.pdf
+!bug1539074.pdf
+!bug1539074.1.pdf
+!issue18305.pdf
+!issue18360.pdf
+!issue18099_reduced.pdf
+!file_pdfjs_test.pdf
+!issue18536.pdf
+!issue18561.pdf
+!highlights.pdf
+!highlight.pdf
+!bug1708040.pdf
+!issue18694.pdf
+!issue18693.pdf
+!bug1918115.pdf
+!bug1919513.pdf
+!issue16038.pdf
+!highlight_popup.pdf
+!issue18072.pdf
+!stamps.pdf
+!issue15096.pdf
+!issue18036.pdf
+!issue18894.pdf
+!bug1922766.pdf
+!issue18956.pdf
+!issue19083.pdf

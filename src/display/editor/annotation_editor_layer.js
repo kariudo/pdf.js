@@ -22,6 +22,8 @@
 // eslint-disable-next-line max-len
 /** @typedef {import("../annotation_layer.js").AnnotationLayer} AnnotationLayer */
 /** @typedef {import("../draw_layer.js").DrawLayer} DrawLayer */
+// eslint-disable-next-line max-len
+/** @typedef {import("../src/display/struct_tree_layer_builder.js").StructTreeLayerBuilder} StructTreeLayerBuilder */
 
 import { AnnotationEditorType, FeatureTest } from "../../shared/util.js";
 import { AnnotationEditor } from "./editor.js";
@@ -35,6 +37,7 @@ import { StampEditor } from "./stamp.js";
  * @typedef {Object} AnnotationEditorLayerOptions
  * @property {Object} mode
  * @property {HTMLDivElement} div
+ * @property {StructTreeLayerBuilder} structTreeLayer
  * @property {AnnotationEditorUIManager} uiManager
  * @property {boolean} enabled
  * @property {TextAccessibilityManager} [accessibilityManager]
@@ -61,11 +64,7 @@ class AnnotationEditorLayer {
 
   #annotationLayer = null;
 
-  #boundPointerup = null;
-
-  #boundPointerdown = null;
-
-  #boundTextLayerPointerDown = null;
+  #clickAC = null;
 
   #editorFocusTimeoutId = null;
 
@@ -78,6 +77,8 @@ class AnnotationEditorLayer {
   #isDisabling = false;
 
   #textLayer = null;
+
+  #textSelectionAC = null;
 
   #uiManager;
 
@@ -97,6 +98,7 @@ class AnnotationEditorLayer {
     uiManager,
     pageIndex,
     div,
+    structTreeLayer,
     accessibilityManager,
     annotationLayer,
     drawLayer,
@@ -121,6 +123,7 @@ class AnnotationEditorLayer {
     this.viewport = viewport;
     this.#textLayer = textLayer;
     this.drawLayer = drawLayer;
+    this._structTree = structTreeLayer;
 
     this.#uiManager.addLayer(this);
   }
@@ -230,6 +233,10 @@ class AnnotationEditorLayer {
     this.#uiManager.addCommands(params);
   }
 
+  toggleDrawing(enabled = false) {
+    this.div.classList.toggle("drawing", !enabled);
+  }
+
   togglePointerEvents(enabled = false) {
     this.div.classList.toggle("disabled", !enabled);
   }
@@ -242,7 +249,7 @@ class AnnotationEditorLayer {
    * Enable pointer events on the main div in order to enable
    * editor creation.
    */
-  enable() {
+  async enable() {
     this.div.tabIndex = 0;
     this.togglePointerEvents(true);
     const annotationElementIds = new Set();
@@ -269,7 +276,7 @@ class AnnotationEditorLayer {
       if (annotationElementIds.has(editable.data.id)) {
         continue;
       }
-      const editor = this.deserialize(editable);
+      const editor = await this.deserialize(editable);
       if (!editor) {
         continue;
       }
@@ -321,8 +328,10 @@ class AnnotationEditorLayer {
         editor = changedAnnotations.get(id);
         if (editor) {
           this.#uiManager.addChangedExistingAnnotation(editor);
-          editor.renderAnnotationElement(editable);
-          editor.show(false);
+          if (editor.renderAnnotationElement(editable)) {
+            // Content has changed, so we need to hide the editor.
+            editor.show(false);
+          }
         }
         editable.show();
       }
@@ -361,11 +370,14 @@ class AnnotationEditorLayer {
 
   enableTextSelection() {
     this.div.tabIndex = -1;
-    if (this.#textLayer?.div && !this.#boundTextLayerPointerDown) {
-      this.#boundTextLayerPointerDown = this.#textLayerPointerDown.bind(this);
+    if (this.#textLayer?.div && !this.#textSelectionAC) {
+      this.#textSelectionAC = new AbortController();
+      const signal = this.#uiManager.combinedSignal(this.#textSelectionAC);
+
       this.#textLayer.div.addEventListener(
         "pointerdown",
-        this.#boundTextLayerPointerDown
+        this.#textLayerPointerDown.bind(this),
+        { signal }
       );
       this.#textLayer.div.classList.add("highlighting");
     }
@@ -373,12 +385,10 @@ class AnnotationEditorLayer {
 
   disableTextSelection() {
     this.div.tabIndex = 0;
-    if (this.#textLayer?.div && this.#boundTextLayerPointerDown) {
-      this.#textLayer.div.removeEventListener(
-        "pointerdown",
-        this.#boundTextLayerPointerDown
-      );
-      this.#boundTextLayerPointerDown = null;
+    if (this.#textLayer?.div && this.#textSelectionAC) {
+      this.#textSelectionAC.abort();
+      this.#textSelectionAC = null;
+
       this.#textLayer.div.classList.remove("highlighting");
     }
   }
@@ -387,7 +397,13 @@ class AnnotationEditorLayer {
     // Unselect all the editors in order to let the user select some text
     // without being annoyed by an editor toolbar.
     this.#uiManager.unselectAll();
-    if (event.target === this.#textLayer.div) {
+    const { target } = event;
+    if (
+      target === this.#textLayer.div ||
+      ((target.getAttribute("role") === "img" ||
+        target.classList.contains("endOfContent")) &&
+        this.#textLayer.div.contains(target))
+    ) {
       const { isMac } = FeatureTest.platform;
       if (event.button !== 0 || (event.ctrlKey && isMac)) {
         // Do nothing on right click.
@@ -399,40 +415,42 @@ class AnnotationEditorLayer {
         /* updateButton = */ true
       );
       this.#textLayer.div.classList.add("free");
+      this.toggleDrawing();
       HighlightEditor.startHighlighting(
         this,
         this.#uiManager.direction === "ltr",
-        event
+        { target: this.#textLayer.div, x: event.x, y: event.y }
       );
       this.#textLayer.div.addEventListener(
         "pointerup",
         () => {
           this.#textLayer.div.classList.remove("free");
+          this.toggleDrawing(true);
         },
-        { once: true }
+        { once: true, signal: this.#uiManager._signal }
       );
       event.preventDefault();
     }
   }
 
   enableClick() {
-    if (this.#boundPointerdown) {
+    if (this.#clickAC) {
       return;
     }
-    this.#boundPointerdown = this.pointerdown.bind(this);
-    this.#boundPointerup = this.pointerup.bind(this);
-    this.div.addEventListener("pointerdown", this.#boundPointerdown);
-    this.div.addEventListener("pointerup", this.#boundPointerup);
+    this.#clickAC = new AbortController();
+    const signal = this.#uiManager.combinedSignal(this.#clickAC);
+
+    this.div.addEventListener("pointerdown", this.pointerdown.bind(this), {
+      signal,
+    });
+    this.div.addEventListener("pointerup", this.pointerup.bind(this), {
+      signal,
+    });
   }
 
   disableClick() {
-    if (!this.#boundPointerdown) {
-      return;
-    }
-    this.div.removeEventListener("pointerdown", this.#boundPointerdown);
-    this.div.removeEventListener("pointerup", this.#boundPointerup);
-    this.#boundPointerdown = null;
-    this.#boundPointerup = null;
+    this.#clickAC?.abort();
+    this.#clickAC = null;
   }
 
   attach(editor) {
@@ -540,7 +558,7 @@ class AnnotationEditorLayer {
             () => {
               editor._focusEventsAllowed = true;
             },
-            { once: true }
+            { once: true, signal: this.#uiManager._signal }
           );
           activeElement.focus();
         } else {
@@ -596,6 +614,10 @@ class AnnotationEditorLayer {
     return AnnotationEditorLayer.#editorTypes.get(this.#uiManager.getMode());
   }
 
+  combinedSignal(ac) {
+    return this.#uiManager.combinedSignal(ac);
+  }
+
   /**
    * Create a new editor
    * @param {Object} params
@@ -640,11 +662,11 @@ class AnnotationEditorLayer {
    * @param {Object} data
    * @returns {AnnotationEditor | null}
    */
-  deserialize(data) {
+  async deserialize(data) {
     return (
-      AnnotationEditorLayer.#editorTypes
+      (await AnnotationEditorLayer.#editorTypes
         .get(data.annotationType ?? data.annotationEditorType)
-        ?.deserialize(data, this, this.#uiManager) || null
+        ?.deserialize(data, this, this.#uiManager)) || null
     );
   }
 
@@ -710,14 +732,6 @@ class AnnotationEditorLayer {
    */
   toggleSelected(editor) {
     this.#uiManager.toggleSelected(editor);
-  }
-
-  /**
-   * Check if the editor is selected.
-   * @param {AnnotationEditor} editor
-   */
-  isSelected(editor) {
-    return this.#uiManager.isSelected(editor);
   }
 
   /**

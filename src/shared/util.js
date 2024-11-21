@@ -41,10 +41,12 @@ const BASELINE_FACTOR = LINE_DESCENT_FACTOR / LINE_FACTOR;
  * how these flags are being used:
  *  - ANY, DISPLAY, and PRINT are the normal rendering intents, note the
  *    `PDFPageProxy.{render, getOperatorList, getAnnotations}`-methods.
+ *  - SAVE is used, on the worker-thread, when saving modified annotations.
  *  - ANNOTATIONS_FORMS, ANNOTATIONS_STORAGE, ANNOTATIONS_DISABLE control which
  *    annotations are rendered onto the canvas (i.e. by being included in the
  *    operatorList), note the `PDFPageProxy.{render, getOperatorList}`-methods
  *    and their `annotationMode`-option.
+ *  - IS_EDITING is used when editing is active in the viewer.
  *  - OPLIST is used with the `PDFPageProxy.getOperatorList`-method, note the
  *    `OperatorList`-constructor (on the worker-thread).
  */
@@ -56,6 +58,7 @@ const RenderingIntentFlag = {
   ANNOTATIONS_FORMS: 0x10,
   ANNOTATIONS_STORAGE: 0x20,
   ANNOTATIONS_DISABLE: 0x40,
+  IS_EDITING: 0x80,
   OPLIST: 0x100,
 };
 
@@ -237,11 +240,6 @@ const VerbosityLevel = {
   INFOS: 5,
 };
 
-const CMapCompressionType = {
-  NONE: 0,
-  BINARY: 1,
-};
-
 // All the possible operations for an operator list.
 const OPS = {
   // Intentionally start from 1 so it is easy to spot bad operators that will be
@@ -339,6 +337,8 @@ const OPS = {
   paintImageMaskXObjectRepeat: 89,
   paintSolidColorImageMask: 90,
   constructPath: 91,
+  setStrokeTransparent: 92,
+  setFillTransparent: 93,
 };
 
 const PasswordResponses = {
@@ -363,6 +363,7 @@ function getVerbosityLevel() {
 // end users.
 function info(msg) {
   if (verbosity >= VerbosityLevel.INFOS) {
+    // eslint-disable-next-line no-console
     console.log(`Info: ${msg}`);
   }
 }
@@ -370,6 +371,7 @@ function info(msg) {
 // Non-fatal warnings.
 function warn(msg) {
   if (verbosity >= VerbosityLevel.WARNINGS) {
+    // eslint-disable-next-line no-console
     console.log(`Warning: ${msg}`);
   }
 }
@@ -463,7 +465,10 @@ function shadow(obj, prop, value, nonSerializable = false) {
 const BaseException = (function BaseExceptionClosure() {
   // eslint-disable-next-line no-shadow
   function BaseException(message, name) {
-    if (this.constructor === BaseException) {
+    if (
+      (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) &&
+      this.constructor === BaseException
+    ) {
       unreachable("Cannot initialize BaseException.");
     }
     this.message = message;
@@ -620,6 +625,14 @@ class FeatureTest {
     );
   }
 
+  static get isImageDecoderSupported() {
+    return shadow(
+      this,
+      "isImageDecoderSupported",
+      typeof ImageDecoder !== "undefined"
+    );
+  }
+
   static get platform() {
     if (
       (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) ||
@@ -628,9 +641,18 @@ class FeatureTest {
     ) {
       return shadow(this, "platform", {
         isMac: navigator.platform.includes("Mac"),
+        isWindows: navigator.platform.includes("Win"),
+        isFirefox:
+          (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) ||
+          (typeof navigator?.userAgent === "string" &&
+            navigator.userAgent.includes("Firefox")),
       });
     }
-    return shadow(this, "platform", { isMac: false });
+    return shadow(this, "platform", {
+      isMac: false,
+      isWindows: false,
+      isFirefox: false,
+    });
   }
 
   static get isCSSRoundSupported() {
@@ -1053,21 +1075,12 @@ function normalizeUnicode(str) {
 function getUuid() {
   if (
     (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) ||
-    (typeof crypto !== "undefined" && typeof crypto?.randomUUID === "function")
+    typeof crypto.randomUUID === "function"
   ) {
     return crypto.randomUUID();
   }
   const buf = new Uint8Array(32);
-  if (
-    typeof crypto !== "undefined" &&
-    typeof crypto?.getRandomValues === "function"
-  ) {
-    crypto.getRandomValues(buf);
-  } else {
-    for (let i = 0; i < 32; i++) {
-      buf[i] = Math.floor(Math.random() * 255);
-    }
-  }
+  crypto.getRandomValues(buf);
   return bytesToString(buf);
 }
 
@@ -1084,6 +1097,31 @@ const FontRenderOps = {
   TRANSFORM: 7,
   TRANSLATE: 8,
 };
+
+// TODO: Remove this once `Uint8Array.prototype.toHex` is generally available.
+function toHexUtil(arr) {
+  if (Uint8Array.prototype.toHex) {
+    return arr.toHex();
+  }
+  return Array.from(arr, num => hexNumbers[num]).join("");
+}
+
+// TODO: Remove this once `Uint8Array.prototype.toBase64` is generally
+//       available.
+function toBase64Util(arr) {
+  if (Uint8Array.prototype.toBase64) {
+    return arr.toBase64();
+  }
+  return btoa(bytesToString(arr));
+}
+
+// TODO: Remove this once `Uint8Array.fromBase64` is generally available.
+function fromBase64Util(str) {
+  if (Uint8Array.fromBase64) {
+    return Uint8Array.fromBase64(str);
+  }
+  return stringToBytes(atob(str));
+}
 
 export {
   AbortException,
@@ -1102,16 +1140,17 @@ export {
   BaseException,
   BASELINE_FACTOR,
   bytesToString,
-  CMapCompressionType,
   createValidAbsoluteUrl,
   DocumentActionEventType,
   FeatureTest,
   FONT_IDENTITY_MATRIX,
   FontRenderOps,
   FormatError,
+  fromBase64Util,
   getModificationDate,
   getUuid,
   getVerbosityLevel,
+  hexNumbers,
   IDENTITY_MATRIX,
   ImageKind,
   info,
@@ -1138,6 +1177,8 @@ export {
   stringToPDFString,
   stringToUTF8String,
   TextRenderingMode,
+  toBase64Util,
+  toHexUtil,
   UnexpectedResponseException,
   UnknownErrorException,
   unreachable,
