@@ -58,10 +58,7 @@
     "webpack-stream": "^7.0.0",
     "yargs": "^17.7.2"
   },
-  "repository": {
-    "type": "git",
-    "url": "git://github.com/mozilla/pdf.js.git"
-  },
+  "repository": "github:kariudo/pdf.js",
   "engines": {
     "node": ">=20"
   },
