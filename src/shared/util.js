@@ -94,6 +94,7 @@ const AnnotationEditorParamsType = {
   HIGHLIGHT_THICKNESS: 33,
   HIGHLIGHT_FREE: 34,
   HIGHLIGHT_SHOW_ALL: 35,
+  DRAW_STEP: 41,
 };
 
 // Permission flags from Table 22, Section 7.6.3.2 of the PDF specification.
@@ -500,16 +501,11 @@ class InvalidPDFException extends BaseException {
   }
 }
 
-class MissingPDFException extends BaseException {
-  constructor(msg) {
-    super(msg, "MissingPDFException");
-  }
-}
-
-class UnexpectedResponseException extends BaseException {
-  constructor(msg, status) {
-    super(msg, "UnexpectedResponseException");
+class ResponseException extends BaseException {
+  constructor(msg, status, missing) {
+    super(msg, "ResponseException");
     this.status = status;
+    this.missing = missing;
   }
 }
 
@@ -1086,18 +1082,6 @@ function getUuid() {
 
 const AnnotationPrefix = "pdfjs_internal_id_";
 
-const FontRenderOps = {
-  BEZIER_CURVE_TO: 0,
-  MOVE_TO: 1,
-  LINE_TO: 2,
-  QUADRATIC_CURVE_TO: 3,
-  RESTORE: 4,
-  SAVE: 5,
-  SCALE: 6,
-  TRANSFORM: 7,
-  TRANSLATE: 8,
-};
-
 // TODO: Remove this once `Uint8Array.prototype.toHex` is generally available.
 function toHexUtil(arr) {
   if (Uint8Array.prototype.toHex) {
@@ -1123,6 +1107,19 @@ function fromBase64Util(str) {
   return stringToBytes(atob(str));
 }
 
+// TODO: Remove this once https://bugzilla.mozilla.org/show_bug.cgi?id=1928493
+//       is fixed.
+if (
+  (typeof PDFJSDev === "undefined" || PDFJSDev.test("SKIP_BABEL")) &&
+  typeof Promise.try !== "function"
+) {
+  Promise.try = function (fn, ...args) {
+    return new Promise(resolve => {
+      resolve(fn(...args));
+    });
+  };
+}
+
 export {
   AbortException,
   AnnotationActionEventType,
@@ -1144,7 +1141,6 @@ export {
   DocumentActionEventType,
   FeatureTest,
   FONT_IDENTITY_MATRIX,
-  FontRenderOps,
   FormatError,
   fromBase64Util,
   getModificationDate,
@@ -1160,7 +1156,6 @@ export {
   LINE_DESCENT_FACTOR,
   LINE_FACTOR,
   MAX_IMAGE_SIZE_TO_CACHE,
-  MissingPDFException,
   normalizeUnicode,
   objectFromMap,
   objectSize,
@@ -1170,6 +1165,7 @@ export {
   PasswordResponses,
   PermissionFlag,
   RenderingIntentFlag,
+  ResponseException,
   setVerbosityLevel,
   shadow,
   string32,
@@ -1179,7 +1175,6 @@ export {
   TextRenderingMode,
   toBase64Util,
   toHexUtil,
-  UnexpectedResponseException,
   UnknownErrorException,
   unreachable,
   utf8StringToString,

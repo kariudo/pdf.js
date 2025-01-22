@@ -439,7 +439,7 @@ pdfjs-editor-new-alt-text-dialog-edit-label = Alternative tekst (ôfbyldingsbesk
 # Modal header positioned above a text box where users can add the alt text.
 pdfjs-editor-new-alt-text-dialog-add-label = Alternative tekst (ôfbyldingsbeskriuwing) tafoegje
 pdfjs-editor-new-alt-text-textarea =
-    .placeholder = Skriuw hjir jo beskriuwing...
+    .placeholder = Skriuw hjir jo beskriuwing…
 # This text refers to the alt text box above this description. It offers a definition of alt text.
 pdfjs-editor-new-alt-text-description = Koarte beskriuwing foar minsken dy’t de ôfbylding net sjen kinne of wannear’t de ôfbylding net laden wurdt.
 # This is a required legal disclaimer that refers to the automatically created text inside the alt text box above this text. It disappears if the text is edited by a human.
@@ -493,3 +493,23 @@ pdfjs-editor-alt-text-settings-editor-title = Alternative-tekstbewurker
 pdfjs-editor-alt-text-settings-show-dialog-button-label = Alternative-tekstbewurker daliks toane by tafoegjen fan in ôfbylding
 pdfjs-editor-alt-text-settings-show-dialog-description = Helpt jo derfoar te soargjen dat al jo ôfbyldingen alternative tekst hawwe.
 pdfjs-editor-alt-text-settings-close-button = Slute
+
+## "Annotations removed" bar
+
+pdfjs-editor-undo-bar-message-highlight = Markearring fuortsmiten
+pdfjs-editor-undo-bar-message-freetext = Tekst fuortsmiten
+pdfjs-editor-undo-bar-message-ink = Tekening fuortsmiten
+pdfjs-editor-undo-bar-message-stamp = Ofbylding fuortsmiten
+# Variables:
+#   $count (Number) - the number of removed annotations.
+pdfjs-editor-undo-bar-message-multiple =
+    { $count ->
+        [one] { $count } annotaasje fuortsmiten
+       *[other] { $count } annotaasjes fuortsmiten
+    }
+pdfjs-editor-undo-bar-undo-button =
+    .title = Ungedien meitsje
+pdfjs-editor-undo-bar-undo-button-label = Ungedien meitsje
+pdfjs-editor-undo-bar-close-button =
+    .title = Slute
+pdfjs-editor-undo-bar-close-button-label = Slute

@@ -66,19 +66,21 @@
   font-size: 0;
 }
 
-.textLayer.highlighting {
-  cursor: var(--editorFreeHighlight-editing-cursor);
+.textLayer {
+  &.highlighting {
+    cursor: var(--editorFreeHighlight-editing-cursor);
 
-  &:not(.free) span {
-    cursor: var(--editorHighlight-editing-cursor);
+    &:not(.free) span {
+      cursor: var(--editorHighlight-editing-cursor);
 
-    &[role="img"] {
+      &[role="img"] {
+        cursor: var(--editorFreeHighlight-editing-cursor);
+      }
+    }
+
+    &.free span {
       cursor: var(--editorFreeHighlight-editing-cursor);
     }
-  }
-
-  &.free span {
-    cursor: var(--editorFreeHighlight-editing-cursor);
   }
 }
 
@@ -156,6 +158,10 @@
   cursor: var(--editorInk-editing-cursor);
 }
 
+.annotationEditorLayer .draw {
+  box-sizing: border-box;
+}
+
 .annotationEditorLayer :is(.freeTextEditor, .inkEditor, .stampEditor) {
   position: absolute;
   background: transparent;
@@ -168,10 +174,6 @@
 
   &.draggable.selectedEditor {
     cursor: move;
-  }
-
-  &.moving {
-    touch-action: none;
   }
 
   &.selectedEditor {

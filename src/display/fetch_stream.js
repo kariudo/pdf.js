@@ -16,8 +16,9 @@
 import { AbortException, assert, warn } from "../shared/util.js";
 import {
   createHeaders,
-  createResponseStatusError,
+  createResponseError,
   extractFilenameFromHeader,
+  getResponseOrigin,
   validateRangeRequestCapabilities,
   validateResponseStatus,
 } from "./network_utils.js";
@@ -52,6 +53,8 @@ function getArrayBuffer(val) {
 
 /** @implements {IPDFStream} */
 class PDFFetchStream {
+  _responseOrigin = null;
+
   constructor(source) {
     this.source = source;
     this.isHttp = /^https?:/i.test(source.url);
@@ -121,8 +124,10 @@ class PDFFetchStreamReader {
       createFetchOptions(headers, this._withCredentials, this._abortController)
     )
       .then(response => {
+        stream._responseOrigin = getResponseOrigin(response.url);
+
         if (!validateResponseStatus(response.status)) {
-          throw createResponseStatusError(response.status, url);
+          throw createResponseError(response.status, url);
         }
         this._reader = response.body.getReader();
         this._headersCapability.resolve();
@@ -217,8 +222,15 @@ class PDFFetchStreamRangeReader {
       createFetchOptions(headers, this._withCredentials, this._abortController)
     )
       .then(response => {
+        const responseOrigin = getResponseOrigin(response.url);
+
+        if (responseOrigin !== stream._responseOrigin) {
+          throw new Error(
+            `Expected range response-origin "${responseOrigin}" to match "${stream._responseOrigin}".`
+          );
+        }
         if (!validateResponseStatus(response.status)) {
-          throw createResponseStatusError(response.status, url);
+          throw createResponseError(response.status, url);
         }
         this._readCapability.resolve();
         this._reader = response.body.getReader();

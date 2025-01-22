@@ -94,6 +94,7 @@
 !issue8424.pdf
 !issue8480.pdf
 !bug1650302_reduced.pdf
+!issue18816.pdf
 !issue8570.pdf
 !issue8697.pdf
 !issue8702.pdf
@@ -232,6 +233,7 @@
 !issue5954.pdf
 !issue6612.pdf
 !alphatrans.pdf
+!issue14200.pdf
 !pattern_text_embedded_font.pdf
 !devicen.pdf
 !cmykjpeg.pdf
@@ -501,6 +503,7 @@
 !annotation-line-without-appearance.pdf
 !bug1669099.pdf
 !annotation-square-circle.pdf
+!bug1942064.pdf
 !annotation-square-circle-without-appearance.pdf
 !annotation-stamp.pdf
 !issue14048.pdf
@@ -527,6 +530,7 @@
 !bug1743245.pdf
 !quadpoints.pdf
 !transparent.pdf
+!issue19326.pdf
 !issue13931.pdf
 !xobject-image.pdf
 !issue15441.pdf
@@ -553,6 +557,7 @@
 !poppler-67295-0.pdf
 !poppler-85140-0.pdf
 !issue15012.pdf
+!issue19176.pdf
 !issue15150.pdf
 !poppler-395-0-fuzzed.pdf
 !issue14165.pdf
@@ -682,3 +687,13 @@
 !bug1922766.pdf
 !issue18956.pdf
 !issue19083.pdf
+!issue19120.pdf
+!bug1934157.pdf
+!rotated_ink.pdf
+!inks.pdf
+!inks_basic.pdf
+!issue19182.pdf
+!issue18911.pdf
+!issue19207.pdf
+!issue19239.pdf
+!issue19360.pdf

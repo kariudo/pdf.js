@@ -1686,12 +1686,12 @@ class MarkupAnnotation extends Annotation {
       buffer.push(`${fillColor[0]} ${fillColor[1]} ${fillColor[2]} rg`);
     }
 
-    let pointsArray = this.data.quadPoints;
-    if (!pointsArray) {
-      // If there are no quadpoints, the rectangle should be used instead.
-      // Convert the rectangle definition to a points array similar to how the
-      // quadpoints are defined.
-      pointsArray = Float32Array.from([
+    // If there are no quadpoints, the rectangle should be used instead.
+    // Convert the rectangle definition to a points array similar to how the
+    // quadpoints are defined.
+    const pointsArray =
+      this.data.quadPoints ||
+      Float32Array.from([
         this.rectangle[0],
         this.rectangle[3],
         this.rectangle[2],
@@ -1701,7 +1701,6 @@ class MarkupAnnotation extends Annotation {
         this.rectangle[2],
         this.rectangle[1],
       ]);
-    }
 
     for (let i = 0, ii = pointsArray.length; i < ii; i += 8) {
       const [mX, MX, mY, MY] = pointsCallback(
@@ -1755,11 +1754,8 @@ class MarkupAnnotation extends Annotation {
   }
 
   static async createNewAnnotation(xref, annotation, changes, params) {
-    if (!annotation.ref) {
-      annotation.ref = xref.getNewTemporaryRef();
-    }
+    const annotationRef = (annotation.ref ||= xref.getNewTemporaryRef());
 
-    const annotationRef = annotation.ref;
     const ap = await this.createNewAppearanceStream(annotation, xref, params);
     let annotationDict;
 
@@ -4382,7 +4378,7 @@ class InkAnnotation extends MarkupAnnotation {
     const { dict, xref } = params;
     this.data.annotationType = AnnotationType.INK;
     this.data.inkLists = [];
-    this.data.isEditable = !this.data.noHTML && this.data.it === "InkHighlight";
+    this.data.isEditable = !this.data.noHTML;
     // We want to be able to add mouse listeners to the annotation.
     this.data.noHTML = false;
     this.data.opacity = dict.get("CA") || 1;
@@ -4459,16 +4455,29 @@ class InkAnnotation extends MarkupAnnotation {
   }
 
   static createNewDict(annotation, xref, { apRef, ap }) {
-    const { color, opacity, paths, outlines, rect, rotation, thickness } =
-      annotation;
-    const ink = new Dict(xref);
+    const {
+      oldAnnotation,
+      color,
+      opacity,
+      paths,
+      outlines,
+      rect,
+      rotation,
+      thickness,
+      user,
+    } = annotation;
+    const ink = oldAnnotation || new Dict(xref);
     ink.set("Type", Name.get("Annot"));
     ink.set("Subtype", Name.get("Ink"));
-    ink.set("CreationDate", `D:${getModificationDate()}`);
+    ink.set(oldAnnotation ? "M" : "CreationDate", `D:${getModificationDate()}`);
     ink.set("Rect", rect);
-    ink.set("InkList", outlines?.points || paths.map(p => p.points));
+    ink.set("InkList", outlines?.points || paths.points);
     ink.set("F", 4);
     ink.set("Rotate", rotation);
+
+    if (user) {
+      ink.set("T", stringToAsciiOrUTF16BE(user));
+    }
 
     if (outlines) {
       // Free highlight.
@@ -4523,28 +4532,32 @@ class InkAnnotation extends MarkupAnnotation {
       appearanceBuffer.push("/R0 gs");
     }
 
-    const buffer = [];
-    for (const { bezier } of paths) {
-      buffer.length = 0;
-      buffer.push(
-        `${numberToString(bezier[0])} ${numberToString(bezier[1])} m`
+    for (const outline of paths.lines) {
+      appearanceBuffer.push(
+        `${numberToString(outline[4])} ${numberToString(outline[5])} m`
       );
-      if (bezier.length === 2) {
-        buffer.push(
-          `${numberToString(bezier[0])} ${numberToString(bezier[1])} l S`
-        );
-      } else {
-        for (let i = 2, ii = bezier.length; i < ii; i += 6) {
-          const curve = bezier
-            .slice(i, i + 6)
-            .map(numberToString)
-            .join(" ");
-          buffer.push(`${curve} c`);
+      for (let i = 6, ii = outline.length; i < ii; i += 6) {
+        if (isNaN(outline[i])) {
+          appearanceBuffer.push(
+            `${numberToString(outline[i + 4])} ${numberToString(
+              outline[i + 5]
+            )} l`
+          );
+        } else {
+          const [c1x, c1y, c2x, c2y, x, y] = outline.slice(i, i + 6);
+          appearanceBuffer.push(
+            [c1x, c1y, c2x, c2y, x, y].map(numberToString).join(" ") + " c"
+          );
         }
-        buffer.push("S");
       }
-      appearanceBuffer.push(buffer.join("\n"));
+      if (outline.length === 6) {
+        appearanceBuffer.push(
+          `${numberToString(outline[4])} ${numberToString(outline[5])} l`
+        );
+      }
     }
+    appearanceBuffer.push("S");
+
     const appearance = appearanceBuffer.join("\n");
 
     const appearanceStreamDict = new Dict(xref);
@@ -4587,18 +4600,17 @@ class InkAnnotation extends MarkupAnnotation {
       `${numberToString(outline[4])} ${numberToString(outline[5])} m`
     );
     for (let i = 6, ii = outline.length; i < ii; i += 6) {
-      if (isNaN(outline[i]) || outline[i] === null) {
+      if (isNaN(outline[i])) {
         appearanceBuffer.push(
           `${numberToString(outline[i + 4])} ${numberToString(
             outline[i + 5]
           )} l`
         );
       } else {
-        const curve = outline
-          .slice(i, i + 6)
-          .map(numberToString)
-          .join(" ");
-        appearanceBuffer.push(`${curve} c`);
+        const [c1x, c1y, c2x, c2y, x, y] = outline.slice(i, i + 6);
+        appearanceBuffer.push(
+          [c1x, c1y, c2x, c2y, x, y].map(numberToString).join(" ") + " c"
+        );
       }
     }
     appearanceBuffer.push("h f");
@@ -5006,7 +5018,6 @@ class StampAnnotation extends MarkupAnnotation {
       oldAnnotation ? "M" : "CreationDate",
       `D:${getModificationDate()}`
     );
-    stamp.set("CreationDate", `D:${getModificationDate()}`);
     stamp.set("Rect", rect);
     stamp.set("F", 4);
     stamp.set("Border", [0, 0, 0]);

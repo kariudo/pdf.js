@@ -35,6 +35,7 @@ import {
   PermissionFlag,
   PixelsPerInch,
   shadow,
+  stopEvent,
   version,
 } from "pdfjs-lib";
 import {
@@ -125,6 +126,8 @@ function isValidAnnotationEditorMode(mode) {
  *   mode.
  * @property {boolean} [enableHWA] - Enables hardware acceleration for
  *   rendering. The default value is `false`.
+ * @property {boolean} [supportsPinchToZoom] - Enable zooming on pinch gesture.
+ *   The default value is `true`.
  */
 
 class PDFPageViewBuffer {
@@ -213,6 +216,8 @@ class PDFViewer {
 
   #containerTopLeft = null;
 
+  #editorUndoBar = null;
+
   #enableHWA = false;
 
   #enableHighlightFloatingButton = false;
@@ -244,6 +249,8 @@ class PDFViewer {
   #scrollModePageState = null;
 
   #scaleTimeoutId = null;
+
+  #supportsPinchToZoom = true;
 
   #textLayerMode = TextLayerMode.ENABLE;
 
@@ -280,6 +287,7 @@ class PDFViewer {
     this.downloadManager = options.downloadManager || null;
     this.findController = options.findController || null;
     this.#altTextManager = options.altTextManager || null;
+    this.#editorUndoBar = options.editorUndoBar || null;
 
     if (this.findController) {
       this.findController.onIsPageVisible = pageNumber =>
@@ -312,6 +320,7 @@ class PDFViewer {
     this.pageColors = options.pageColors || null;
     this.#mlManager = options.mlManager || null;
     this.#enableHWA = options.enableHWA || false;
+    this.#supportsPinchToZoom = options.supportsPinchToZoom !== false;
 
     this.defaultRenderingQueue = !options.renderingQueue;
     if (
@@ -748,8 +757,7 @@ class PDFViewer {
         this.#getAllTextInProgress ||
         textLayerMode === TextLayerMode.ENABLE_PERMISSIONS
       ) {
-        event.preventDefault();
-        event.stopPropagation();
+        stopEvent(event);
         return;
       }
       this.#getAllTextInProgress = true;
@@ -786,8 +794,7 @@ class PDFViewer {
           classList.remove("copyAll");
         });
 
-      event.preventDefault();
-      event.stopPropagation();
+      stopEvent(event);
     }
   }
 
@@ -908,7 +915,9 @@ class PDFViewer {
               this.#enableHighlightFloatingButton,
               this.#enableUpdatedAddImage,
               this.#enableNewAltTextWhenAddingImage,
-              this.#mlManager
+              this.#mlManager,
+              this.#editorUndoBar,
+              this.#supportsPinchToZoom
             );
             eventBus.dispatch("annotationeditoruimanager", {
               source: this,

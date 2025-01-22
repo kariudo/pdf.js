@@ -229,18 +229,6 @@ function getAnnotationSelector(id) {
   return `[data-annotation-id="${id}"]`;
 }
 
-function getSelectedEditors(page) {
-  return page.evaluate(() => {
-    const elements = document.querySelectorAll(".selectedEditor");
-    const results = [];
-    for (const { id } of elements) {
-      results.push(parseInt(id.split("_").at(-1)));
-    }
-    results.sort();
-    return results;
-  });
-}
-
 async function getSpanRectFromText(page, pageNumber, text) {
   await page.waitForSelector(
     `.page[data-page-number="${pageNumber}"] > .textLayer .endOfContent`
@@ -359,8 +347,23 @@ async function applyFunctionToEditor(page, editorId, func) {
   );
 }
 
+async function selectEditor(page, selector, count = 1) {
+  const editorRect = await getRect(page, selector);
+  await page.mouse.click(
+    editorRect.x + editorRect.width / 2,
+    editorRect.y + editorRect.height / 2,
+    { count }
+  );
+  await waitForSelectedEditor(page, selector);
+}
+
 async function waitForSelectedEditor(page, selector) {
   return page.waitForSelector(`${selector}.selectedEditor`);
+}
+
+async function unselectEditor(page, selector) {
+  await page.keyboard.press("Escape");
+  await waitForUnselectedEditor(page, selector);
 }
 
 async function waitForUnselectedEditor(page, selector) {
@@ -479,23 +482,23 @@ function getEditors(page, kind) {
     const elements = document.querySelectorAll(`.${aKind}Editor`);
     const results = [];
     for (const { id } of elements) {
-      results.push(id);
+      results.push(parseInt(id.split("_").at(-1)));
     }
+    results.sort();
     return results;
   }, kind);
 }
 
-function getEditorDimensions(page, id) {
-  return page.evaluate(n => {
-    const element = document.getElementById(`pdfjs_internal_editor_${n}`);
-    const { style } = element;
+function getEditorDimensions(page, selector) {
+  return page.evaluate(sel => {
+    const { style } = document.querySelector(sel);
     return {
       left: style.left,
       top: style.top,
       width: style.width,
       height: style.height,
     };
-  }, id);
+  }, selector);
 }
 
 async function serializeBitmapDimensions(page) {
@@ -522,10 +525,15 @@ async function serializeBitmapDimensions(page) {
   });
 }
 
-async function dragAndDropAnnotation(page, startX, startY, tX, tY) {
+async function dragAndDrop(page, selector, translations, steps = 1) {
+  const rect = await getRect(page, selector);
+  const startX = rect.x + rect.width / 2;
+  const startY = rect.y + rect.height / 2;
   await page.mouse.move(startX, startY);
   await page.mouse.down();
-  await page.mouse.move(startX + tX, startY + tY);
+  for (const [tX, tY] of translations) {
+    await page.mouse.move(startX + tX, startY + tY, { steps });
+  }
   await page.mouse.up();
   await page.waitForSelector("#viewer:not(.noUserSelect)");
 }
@@ -553,6 +561,14 @@ function waitForAnnotationModeChanged(page) {
 function waitForPageRendered(page) {
   return createPromise(page, resolve => {
     window.PDFViewerApplication.eventBus.on("pagerendered", resolve, {
+      once: true,
+    });
+  });
+}
+
+function waitForEditorMovedInDOM(page) {
+  return createPromise(page, resolve => {
+    window.PDFViewerApplication.eventBus.on("editormovedindom", resolve, {
       once: true,
     });
   });
@@ -756,6 +772,12 @@ async function kbFocusPrevious(page) {
   await awaitPromise(handle);
 }
 
+async function kbSave(page) {
+  await page.keyboard.down(modifier);
+  await page.keyboard.press("s");
+  await page.keyboard.up(modifier);
+}
+
 async function switchToEditor(name, page, disable = false) {
   const modeChangedHandle = await createPromise(page, resolve => {
     window.PDFViewerApplication.eventBus.on(
@@ -773,16 +795,57 @@ async function switchToEditor(name, page, disable = false) {
   await awaitPromise(modeChangedHandle);
 }
 
+function waitForNoElement(page, selector) {
+  return page.waitForFunction(
+    sel => !document.querySelector(sel),
+    {},
+    selector
+  );
+}
+
+function isCanvasWhite(page, pageNumber, rectangle) {
+  return page.evaluate(
+    (rect, pageN) => {
+      const canvas = document.querySelector(
+        `.page[data-page-number = "${pageN}"] .canvasWrapper canvas`
+      );
+      const canvasRect = canvas.getBoundingClientRect();
+      const ctx = canvas.getContext("2d");
+      rect ||= canvasRect;
+      const { data } = ctx.getImageData(
+        rect.x - canvasRect.x,
+        rect.y - canvasRect.y,
+        rect.width,
+        rect.height
+      );
+      return new Uint32Array(data.buffer).every(x => x === 0xffffffff);
+    },
+    rectangle,
+    pageNumber
+  );
+}
+
+async function cleanupEditing(pages, switcher) {
+  for (const [, page] of pages) {
+    await page.evaluate(() => {
+      window.uiManager.reset();
+    });
+    // Disable editing mode.
+    await switcher(page, /* disable */ true);
+  }
+}
+
 export {
   applyFunctionToEditor,
   awaitPromise,
+  cleanupEditing,
   clearInput,
   closePages,
   closeSinglePage,
   copy,
   copyToClipboard,
   createPromise,
-  dragAndDropAnnotation,
+  dragAndDrop,
   firstPageOnTop,
   getAnnotationSelector,
   getAnnotationStorage,
@@ -793,11 +856,11 @@ export {
   getFirstSerialized,
   getQuerySelector,
   getRect,
-  getSelectedEditors,
   getSelector,
   getSerialized,
   getSpanRectFromText,
   hover,
+  isCanvasWhite,
   isVisible,
   kbBigMoveDown,
   kbBigMoveLeft,
@@ -811,6 +874,7 @@ export {
   kbModifierDown,
   kbModifierUp,
   kbRedo,
+  kbSave,
   kbSelectAll,
   kbUndo,
   loadAndWait,
@@ -818,14 +882,18 @@ export {
   paste,
   pasteFromClipboard,
   scrollIntoView,
+  selectEditor,
   serializeBitmapDimensions,
   setCaretAt,
   switchToEditor,
+  unselectEditor,
   waitAndClick,
   waitForAnnotationEditorLayer,
   waitForAnnotationModeChanged,
+  waitForEditorMovedInDOM,
   waitForEntryInStorage,
   waitForEvent,
+  waitForNoElement,
   waitForPageRendered,
   waitForSandboxTrip,
   waitForSelectedEditor,

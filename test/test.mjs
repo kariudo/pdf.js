@@ -806,7 +806,7 @@ async function startIntegrationTest() {
   onAllSessionsClosed = onAllSessionsClosedAfterTests("integration");
   startServer();
 
-  const { runTests } = await import("./integration-boot.mjs");
+  const { runTests } = await import("./integration/jasmine-boot.js");
   await startBrowsers({
     baseUrl: null,
     initializeSession: session => {
@@ -952,6 +952,8 @@ async function startBrowser({
       "browser.newtabpage.enabled": false,
       // Disable network connections to Contile.
       "browser.topsites.contile.enabled": false,
+      // Disable logging for remote settings.
+      "services.settings.loglevel": "off",
       ...extraPrefsFirefox,
     };
   }

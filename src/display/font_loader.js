@@ -15,7 +15,6 @@
 
 import {
   assert,
-  FontRenderOps,
   isNodeJS,
   shadow,
   string32,
@@ -360,13 +359,17 @@ class FontLoader {
 }
 
 class FontFaceObject {
-  constructor(translatedData, { disableFontFace = false, inspectFont = null }) {
+  constructor(
+    translatedData,
+    { disableFontFace = false, fontExtraProperties = false, inspectFont = null }
+  ) {
     this.compiledGlyphs = Object.create(null);
     // importing translated data
     for (const i in translatedData) {
       this[i] = translatedData[i];
     }
     this.disableFontFace = disableFontFace === true;
+    this.fontExtraProperties = fontExtraProperties === true;
     this._inspectFont = inspectFont;
   }
 
@@ -421,95 +424,20 @@ class FontFaceObject {
       return this.compiledGlyphs[character];
     }
 
+    const objId = this.loadedName + "_path_" + character;
     let cmds;
     try {
-      cmds = objs.get(this.loadedName + "_path_" + character);
+      cmds = objs.get(objId);
     } catch (ex) {
       warn(`getPathGenerator - ignoring character: "${ex}".`);
     }
+    const path = new Path2D(cmds || "");
 
-    if (!Array.isArray(cmds) || cmds.length === 0) {
-      return (this.compiledGlyphs[character] = function (c, size) {
-        // No-op function, to allow rendering to continue.
-      });
+    if (!this.fontExtraProperties) {
+      // Remove the raw path-string, since we don't need it anymore.
+      objs.delete(objId);
     }
-
-    const commands = [];
-    for (let i = 0, ii = cmds.length; i < ii; ) {
-      switch (cmds[i++]) {
-        case FontRenderOps.BEZIER_CURVE_TO:
-          {
-            const [a, b, c, d, e, f] = cmds.slice(i, i + 6);
-            commands.push(ctx => ctx.bezierCurveTo(a, b, c, d, e, f));
-            i += 6;
-          }
-          break;
-        case FontRenderOps.MOVE_TO:
-          {
-            const [a, b] = cmds.slice(i, i + 2);
-            commands.push(ctx => ctx.moveTo(a, b));
-            i += 2;
-          }
-          break;
-        case FontRenderOps.LINE_TO:
-          {
-            const [a, b] = cmds.slice(i, i + 2);
-            commands.push(ctx => ctx.lineTo(a, b));
-            i += 2;
-          }
-          break;
-        case FontRenderOps.QUADRATIC_CURVE_TO:
-          {
-            const [a, b, c, d] = cmds.slice(i, i + 4);
-            commands.push(ctx => ctx.quadraticCurveTo(a, b, c, d));
-            i += 4;
-          }
-          break;
-        case FontRenderOps.RESTORE:
-          commands.push(ctx => ctx.restore());
-          break;
-        case FontRenderOps.SAVE:
-          commands.push(ctx => ctx.save());
-          break;
-        case FontRenderOps.SCALE:
-          // The scale command must be at the third position, after save and
-          // transform (for the font matrix) commands (see also
-          // font_renderer.js).
-          // The goal is to just scale the canvas and then run the commands loop
-          // without the need to pass the size parameter to each command.
-          assert(
-            commands.length === 2,
-            "Scale command is only valid at the third position."
-          );
-          break;
-        case FontRenderOps.TRANSFORM:
-          {
-            const [a, b, c, d, e, f] = cmds.slice(i, i + 6);
-            commands.push(ctx => ctx.transform(a, b, c, d, e, f));
-            i += 6;
-          }
-          break;
-        case FontRenderOps.TRANSLATE:
-          {
-            const [a, b] = cmds.slice(i, i + 2);
-            commands.push(ctx => ctx.translate(a, b));
-            i += 2;
-          }
-          break;
-      }
-    }
-    // From https://learn.microsoft.com/en-us/typography/opentype/spec/cff2#paths
-    // All contours must be closed with a lineto operation.
-    commands.push(ctx => ctx.closePath());
-
-    return (this.compiledGlyphs[character] = function glyphDrawer(ctx, size) {
-      commands[0](ctx);
-      commands[1](ctx);
-      ctx.scale(size, -size);
-      for (let i = 2, ii = commands.length; i < ii; i++) {
-        commands[i](ctx);
-      }
-    });
+    return (this.compiledGlyphs[character] = path);
   }
 }
 

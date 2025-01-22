@@ -431,6 +431,14 @@ const defaultOptions = {
     value: 1,
     kind: OptionKind.API,
   },
+  wasmUrl: {
+    /** @type {string} */
+    value:
+      typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")
+        ? "resource://pdf.js/web/wasm/"
+        : "../web/wasm/",
+    kind: OptionKind.API,
+  },
 
   workerPort: {
     /** @type {Object} */
